@@ -5,7 +5,7 @@
  * Converts "ignored properties" to passthrough CSS that gets applied to preview.
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -44,33 +44,46 @@ export function ImportCSSModal({
 }: ImportCSSModalProps) {
   const [importedCSS, setImportedCSS] = useState('');
   const [activeTab, setActiveTab] = useState<'paste' | 'preview'>('paste');
-  const [hasAttemptedPaste, setHasAttemptedPaste] = useState(false);
   const [autoPasteSuccess, setAutoPasteSuccess] = useState(false);
+  const autoPasteAttemptedRef = useRef(false);
 
   // Auto-paste from clipboard when modal opens
   useEffect(() => {
-    if (isOpen && !hasAttemptedPaste) {
-      setHasAttemptedPaste(true);
-      navigator.clipboard.readText()
-        .then(text => {
-          if (text.trim()) {
-            setImportedCSS(text);
-            setAutoPasteSuccess(true);
-            // Switch to preview after successful paste
-            setTimeout(() => setActiveTab('preview'), 100);
-          }
-        })
-        .catch(() => {
-          // Silent fail - user will paste manually
+    if (!isOpen) {
+      autoPasteAttemptedRef.current = false;
+      return;
+    }
+
+    // Only attempt once per modal open
+    if (autoPasteAttemptedRef.current) {
+      return;
+    }
+
+    autoPasteAttemptedRef.current = true;
+
+    navigator.clipboard.readText()
+      .then((text) => {
+        if (text.trim()) {
+          setImportedCSS(text);
+          setAutoPasteSuccess(true);
+          // Switch to preview after successful paste
+          setTimeout(() => setActiveTab('preview'), 150);
+          toast.success('CSS beillesztve a vágólapról');
+        } else {
           setActiveTab('paste');
           setAutoPasteSuccess(false);
-        });
-    }
-  }, [isOpen, hasAttemptedPaste]);
+        }
+      })
+      .catch(() => {
+        // Silent fail - user will paste manually
+        setActiveTab('paste');
+        setAutoPasteSuccess(false);
+      });
+  }, [isOpen]);
 
   // Reset state when modal closes
   const handleClose = () => {
-    setHasAttemptedPaste(false);
+    autoPasteAttemptedRef.current = false;
     setImportedCSS('');
     setActiveTab('paste');
     setAutoPasteSuccess(false);
@@ -102,6 +115,21 @@ export function ImportCSSModal({
     (d) => d.type === 'error'
   ).length;
 
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) {
+        setImportedCSS(text);
+        setActiveTab('preview');
+        toast.success('CSS beillesztve a vágólapról');
+      } else {
+        toast.error('A vágólap üres');
+      }
+    } catch {
+      toast.error('Nem sikerült a vágólapból beilleszteni');
+    }
+  };
+
   const handleImport = () => {
     if (!parseResult.totalProperties) {
       toast.error('Nincs CSS property az importáláshoz');
@@ -113,33 +141,16 @@ export function ImportCSSModal({
     // Show summary
     const messages: string[] = [];
     if (effectCount > 0) {
-      messages.push(
-        `${effectCount} effect property (slider módosítás)`
-      );
+      messages.push(`${effectCount} effect property (slider módosítás)`);
     }
     if (passthroughCount > 0) {
-      messages.push(
-        `${passthroughCount} passthrough property (direct alkalmazás)`
-      );
+      messages.push(`${passthroughCount} passthrough property (direct alkalmazás)`);
     }
 
-    toast.success(
-      `CSS importálva: ${messages.join(', ')}`
-    );
+    toast.success(`CSS importálva: ${messages.join(', ')}`);
 
     setImportedCSS('');
-    onClose();
-  };
-
-  const handlePaste = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      setImportedCSS(text);
-      setActiveTab('preview');
-      toast.success('CSS beillesztve');
-    } catch {
-      toast.error('Nem sikerült a vágólapból beilleszteni');
-    }
+    handleClose();
   };
 
   return (
@@ -148,7 +159,8 @@ export function ImportCSSModal({
         <DialogHeader>
           <DialogTitle className="text-foreground">CSS importálása</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Másold be a CSS kódot, és az "ignored properties" automatikusan passthrough-ként kerülnek alkalmazásra.
+            Másold be a CSS kódot, és az "ignored properties" automatikusan
+            passthrough-ként kerülnek alkalmazásra.
           </DialogDescription>
         </DialogHeader>
 
@@ -169,9 +181,7 @@ export function ImportCSSModal({
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
           <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="paste">
-              CSS beillesztése
-            </TabsTrigger>
+            <TabsTrigger value="paste">CSS beillesztése</TabsTrigger>
             <TabsTrigger value="preview">
               Előnézet
               {parseResult.totalProperties > 0 && (
@@ -192,11 +202,11 @@ export function ImportCSSModal({
                 value={importedCSS}
                 onChange={(e) => setImportedCSS(e.target.value)}
                 placeholder={`/* Bemásolt CSS például: */
-backdrop-filter: blur(30px);
-border-radius: 40px);
-position: relative;
-transform: scale(0.95);
-color: #ffffff;`}
+.glow-effect {
+  position: relative;
+  transform: scale(0.9);
+  mask-image: linear-gradient(to bottom, black 30%, transparent 100%);
+}`}
                 className="font-mono text-xs h-[300px] resize-none"
               />
             </div>
@@ -224,7 +234,9 @@ color: #ffffff;`}
           <TabsContent value="preview" className="space-y-4">
             {parseResult.totalProperties === 0 ? (
               <div className="flex items-center justify-center py-8 text-muted-foreground">
-                <p className="text-sm">Nincs elemzendő CSS — másold be a kódot az első lapon</p>
+                <p className="text-sm">
+                  Nincs elemzendő CSS — másold be a kódot az első lapon
+                </p>
               </div>
             ) : (
               <>
@@ -258,7 +270,11 @@ color: #ffffff;`}
                     <div className="text-[10px] text-muted-foreground mb-1">
                       Hibák
                     </div>
-                    <div className={`text-2xl font-bold ${errorCount > 0 ? 'text-destructive' : 'text-green-500'}`}>
+                    <div
+                      className={`text-2xl font-bold ${
+                        errorCount > 0 ? 'text-destructive' : 'text-green-500'
+                      }`}
+                    >
                       {errorCount}
                     </div>
                     <div className="text-[9px] text-muted-foreground mt-1">
@@ -315,9 +331,10 @@ color: #ffffff;`}
                       </Badge>
                     </div>
                     <p className="text-[10px] text-muted-foreground mb-2">
-                      Ezek a property-k közvetlenül kerülnek alkalmazásra, slider módosítás nélkül.
+                      Ezek a property-k közvetlenül kerülnek alkalmazásra, slider
+                      módosítás nélkül.
                     </p>
-                    <div className="space-y-1">
+                    <div className="space-y-1 max-h-[300px] overflow-y-auto">
                       {Object.entries(parseResult.passthroughProperties).map(
                         ([key, value]) => (
                           <div
@@ -349,7 +366,7 @@ color: #ffffff;`}
                         {parseResult.diagnostics.length}
                       </Badge>
                     </div>
-                    <div className="space-y-1">
+                    <div className="space-y-1 max-h-[200px] overflow-y-auto">
                       {parseResult.diagnostics.map((diag, i) => (
                         <div key={i} className="text-[10px] text-muted-foreground pl-6">
                           <span className="text-destructive font-medium">
