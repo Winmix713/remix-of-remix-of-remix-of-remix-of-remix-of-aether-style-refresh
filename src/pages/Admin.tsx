@@ -45,6 +45,16 @@ import {
   generateNeumorphismCSS,
   generateGlowCSS,
 } from '@/hooks/use-css-generator';
+import {
+  parseCustomCSSWithPassthrough,
+  type CSSParsingDiagnostic,
+} from '@/hooks/use-passthrough-css-manager';
+import { normalizeStyleProperties } from '@/hooks/use-css-normalization';
+import {
+  EnhancedCSSEditor,
+  PassthroughPropertiesPanel,
+} from '@/components/PassthroughCSSComponents';
+import { ImportCSSModal } from '@/components/ImportCSSModal';
 import type {
   EnhancedPreset,
   EffectMode,
@@ -67,6 +77,7 @@ import {
   AlertTriangle,
   Save,
   Undo2,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -413,6 +424,7 @@ export default function Admin() {
 
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [isImportCSSOpen, setIsImportCSSOpen] = useState(false);
 
   const editingPreset = presets.find((p) => p.id === editingPresetId) ?? null;
 
@@ -799,6 +811,36 @@ export default function Admin() {
                       onOverridesChange={(overrides) => {
                         if (editingPresetId) applyBulkOverrides(editingPresetId, overrides);
                       }}
+                      preset={editingPreset}
+                      onRemovePassthrough={(key) => {
+                        // Remove passthrough property
+                        if (editingPresetId && editingPreset) {
+                          const updated = { ...editingPreset };
+                          if (updated.passthroughCSS) {
+                            const newPassthrough = { ...updated.passthroughCSS };
+                            delete newPassthrough[key];
+                            updatePreset(editingPresetId, { passthroughCSS: newPassthrough });
+                          }
+                        }
+                      }}
+                      onClearAllPassthrough={() => {
+                        // Clear all passthrough
+                        if (editingPresetId) {
+                          updatePreset(editingPresetId, { passthroughCSS: {} });
+                        }
+                      }}
+                      onPassthroughChange={(passthroughCSS) => {
+                        // Merge new passthrough properties with existing ones
+                        if (editingPresetId) {
+                          updatePreset(editingPresetId, {
+                            passthroughCSS: {
+                              ...(editingPreset?.passthroughCSS || {}),
+                              ...passthroughCSS,
+                            },
+                          });
+                        }
+                      }}
+                      onImportClick={() => setIsImportCSSOpen(true)}
                     />
                   </TabsContent>
                 </Tabs>
@@ -864,12 +906,35 @@ export default function Admin() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Import CSS Modal ──────────────────────────────────── */}
+      {editingPreset && (
+        <ImportCSSModal
+          isOpen={isImportCSSOpen}
+          onClose={() => setIsImportCSSOpen(false)}
+          mode={editMode}
+          onImport={(effectOverrides, passthroughCSS) => {
+            if (editingPresetId) {
+              // Apply effect overrides
+              applyBulkOverrides(editingPresetId, effectOverrides);
+
+              // Apply passthrough properties
+              updatePreset(editingPresetId, {
+                passthroughCSS: {
+                  ...(editingPreset?.passthroughCSS || {}),
+                  ...passthroughCSS,
+                },
+              });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SECTION 4: CSS Code Editor (Selective Merge)
+// SECTION 4: CSS Code Editor (Selective Merge + Passthrough)
 // ─────────────────────────────────────────────────────────────────
 
 function CSSCodeEditor({
@@ -878,12 +943,22 @@ function CSSCodeEditor({
   effectiveSettings,
   baseSettings,
   onOverridesChange,
+  preset,
+  onRemovePassthrough,
+  onClearAllPassthrough,
+  onPassthroughChange,
+  onImportClick,
 }: {
   presetId: string;
   mode: EffectMode;
   effectiveSettings: PresetSettings;
   baseSettings: PresetSettings;
   onOverridesChange: (overrides: Partial<PresetSettings>) => void;
+  preset?: EnhancedPreset;
+  onRemovePassthrough?: (key: string) => void;
+  onClearAllPassthrough?: () => void;
+  onPassthroughChange?: (properties: Record<string, string>) => void;
+  onImportClick?: () => void;
 }) {
   const generatedCSS = useMemo(
     () => generateCSSForPreset(mode, effectiveSettings),
@@ -893,7 +968,7 @@ function CSSCodeEditor({
 
   const [cssText, setCssText] = useState(generatedCSS);
   const [parseStatus, setParseStatus] = useState<'idle' | 'success' | 'error' | 'modified'>('idle');
-  const [parseMessage, setParseMessage] = useState('');
+  const [diagnostics, setDiagnostics] = useState<CSSParsingDiagnostic[]>([]);
   const [lastAppliedCSS, setLastAppliedCSS] = useState(generatedCSS);
   const isUserEditRef = useRef(false);
 
@@ -903,31 +978,39 @@ function CSSCodeEditor({
       setCssText(fresh);
       setLastAppliedCSS(fresh);
       setParseStatus('idle');
-      setParseMessage('');
+      setDiagnostics([]);
     }
   }, [mode, effectiveSettings]);
 
   const isModified = cssText !== lastAppliedCSS;
 
   /**
-   * KEY CHANGE: Apply CSS uses parseCSSToOverrides for SELECTIVE merge.
-   * Only properties found in the CSS will override base values.
+   * Apply CSS with passthrough separation
    */
   const handleApplyCSS = () => {
-    const overrides = parseCSSToOverrides(mode, cssText);
-    if (overrides) {
-      onOverridesChange(overrides);
-      setParseStatus('success');
-      setParseMessage('✓ CSS sikeresen alkalmazva! Csak a módosított property-k frissültek — az alap értékek megmaradtak.');
-      setLastAppliedCSS(cssText);
-      isUserEditRef.current = false;
-      toast.success('CSS alkalmazva (szelektív merge)');
-    } else {
-      setParseStatus('error');
-      setParseMessage(
-        '✗ Nem sikerült értelmezni a CSS-t. Ellenőrizd, hogy érvényes CSS property-k vannak.',
-      );
+    const result = parseCustomCSSWithPassthrough(cssText, mode);
+
+    setDiagnostics(result.diagnostics);
+
+    if (result.effectOverrides && Object.keys(result.effectOverrides).length > 0) {
+      onOverridesChange(result.effectOverrides);
     }
+
+    // Store passthrough properties in the preset
+    if (Object.keys(result.passthroughProperties).length > 0) {
+      onPassthroughChange?.(result.passthroughProperties);
+    }
+
+    setParseStatus('success');
+    setLastAppliedCSS(cssText);
+    isUserEditRef.current = false;
+
+    const effectCount = Object.keys(result.effectOverrides).length;
+    const passthroughCount = Object.keys(result.passthroughProperties).length;
+
+    toast.success(
+      `CSS alkalmazva: ${effectCount} effect property${effectCount !== 1 ? 's' : ''}, ${passthroughCount} passthrough`
+    );
   };
 
   const handleRegenerate = () => {
@@ -935,7 +1018,7 @@ function CSSCodeEditor({
     setCssText(fresh);
     setLastAppliedCSS(fresh);
     setParseStatus('idle');
-    setParseMessage('');
+    setDiagnostics([]);
     isUserEditRef.current = false;
   };
 
@@ -953,43 +1036,53 @@ function CSSCodeEditor({
     isUserEditRef.current = true;
     if (val === lastAppliedCSS) {
       setParseStatus('idle');
-      setParseMessage('');
+      setDiagnostics([]);
     } else {
       setParseStatus('modified');
-      setParseMessage('Módosított — kattints az „Alkalmaz" gombra. Csak a CSS-ben definiált property-k íródnak felül.');
     }
   };
 
   const livePreviewStyle = useMemo<CSSProperties>(() => {
     try {
-      const overrides = parseCSSToOverrides(mode, cssText);
-      if (!overrides) return {};
+      const result = parseCustomCSSWithPassthrough(cssText, mode);
+      if (!result.effectOverrides || Object.keys(result.effectOverrides).length === 0) return {};
 
-      const merged = mergeSettings(baseSettings, overrides);
+      const merged = mergeSettings(baseSettings, result.effectOverrides);
       let gen: { properties: Record<string, string | undefined>; css: string };
       if (mode === 'liquid-glass') gen = generateLiquidGlassCSS(merged as LiquidGlassSettings);
       else if (mode === 'glassmorphism') gen = generateGlassmorphismCSS(merged as GlassmorphismSettings);
       else if (mode === 'glow') gen = generateGlowCSS(merged as GlowSettings);
       else gen = generateNeumorphismCSS(merged as NeumorphismSettings);
 
-      const style: CSSProperties = {};
+      const allProps: Record<string, string> = {};
+
+      // Collect generated properties (convert kebab-case to camelCase)
       for (const [key, val] of Object.entries(gen.properties)) {
         if (!val) continue;
         const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-        (style as Record<string, string>)[camel] = val;
+        allProps[camel] = val;
       }
+
+      // Add passthrough properties (convert kebab-case to camelCase)
+      for (const [key, val] of Object.entries(result.passthroughProperties)) {
+        const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+        allProps[camel] = val;
+      }
+
       if (mode === 'neumorphism') {
         const bgMatch = gen.css.match(/background:\s*(linear-gradient[^;]+);/);
-        if (bgMatch) style.background = bgMatch[1];
+        if (bgMatch) allProps.background = bgMatch[1];
       }
-      return style;
+
+      // Normalize to avoid shorthand/non-shorthand conflicts
+      return normalizeStyleProperties(allProps);
     } catch {
       return {};
     }
   }, [cssText, mode, baseSettings]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Live mini preview */}
       <div className="relative rounded-lg border border-border bg-gradient-to-br from-muted/50 to-muted p-4 flex items-center justify-center min-h-[80px]">
         <div
@@ -1003,67 +1096,34 @@ function CSSCodeEditor({
         </span>
       </div>
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <Label className="text-xs text-muted-foreground font-medium">CSS kód</Label>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="sm" onClick={handleRegenerate} className="h-7 text-[10px] text-muted-foreground">
-            <RotateCcw className="mr-1 h-3 w-3" /> Újragenerálás
-          </Button>
-          <Button variant="ghost" size="sm" onClick={handleCopyCSS} className="h-7 text-[10px] text-muted-foreground">
-            <Copy className="mr-1 h-3 w-3" /> Másolás
-          </Button>
-        </div>
-      </div>
+      {/* Enhanced CSS Editor */}
+      <EnhancedCSSEditor
+        cssText={cssText}
+        onCssChange={handleCSSChange}
+        onApply={handleApplyCSS}
+        diagnostics={diagnostics}
+      />
 
-      {/* Code editor */}
-      <div className="relative">
-        <Textarea
-          value={cssText}
-          onChange={(e) => handleCSSChange(e.target.value)}
-          className="font-mono text-[11px] leading-relaxed bg-secondary/80 border-border min-h-[220px] resize-y whitespace-pre"
-          spellCheck={false}
-          aria-label="CSS kód szerkesztő"
-        />
-        {isModified && (
-          <div className="absolute top-2 right-2">
-            <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-accent text-accent-foreground border-accent">
-              módosított
-            </Badge>
-          </div>
-        )}
-      </div>
-
-      {/* Status message */}
-      {parseMessage && (
-        <p
-          className={`text-[11px] font-medium ${
-            parseStatus === 'success' ? 'text-green-500' :
-            parseStatus === 'error' ? 'text-destructive' :
-            'text-muted-foreground'
-          }`}
-          role={parseStatus === 'error' ? 'alert' : undefined}
+      {/* Import CSS Button */}
+      {onImportClick && (
+        <Button
+          variant="outline"
+          className="w-full border-border text-muted-foreground hover:text-foreground"
+          onClick={onImportClick}
         >
-          {parseMessage}
-        </p>
+          <Upload className="mr-2 h-4 w-4" />
+          CSS importálása (figyelmen kívül hagyott property-k)
+        </Button>
       )}
 
-      {/* Actions */}
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          onClick={handleApplyCSS}
-          disabled={!isModified}
-          className="bg-primary text-primary-foreground text-xs flex-1"
-        >
-          <Code className="mr-1.5 h-3.5 w-3.5" /> Alkalmaz (szelektív merge)
-        </Button>
-      </div>
-
-      <p className="text-[10px] text-muted-foreground leading-relaxed">
-        💡 <strong>Szelektív merge</strong>: Csak a CSS-ben definiált property-k íródnak felül.
-        A többi alap preset érték megmarad. Használd a „Reset" gombot a visszaállításhoz.
-      </p>
+      {/* Passthrough Properties Panel */}
+      {preset?.passthroughCSS && Object.keys(preset.passthroughCSS).length > 0 && (
+        <PassthroughPropertiesPanel
+          passthroughCSS={preset.passthroughCSS}
+          onRemove={(key) => onRemovePassthrough?.(key)}
+          onClearAll={() => onClearAllPassthrough?.()}
+        />
+      )}
     </div>
   );
 }

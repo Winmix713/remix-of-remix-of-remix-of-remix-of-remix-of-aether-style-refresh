@@ -42,6 +42,7 @@ import {
   type GhostProperty,
   type AccessibilityInfo,
 } from './css-utils';
+import { normalizeStyleProperties } from '@/hooks/use-css-normalization';
 import {
   generateLiquidGlassCSS,
   generateGlassmorphismCSS,
@@ -82,19 +83,23 @@ function settingsToPreviewStyle(
     else if (mode === 'glow')          gen = generateGlowCSS(settings as GlowSettings);
     else                               gen = generateNeumorphismCSS(settings as NeumorphismSettings);
 
-    const style: Record<string, string> = {};
+    const allProps: Record<string, string> = {};
+
     for (const [key, val] of Object.entries(gen.properties)) {
       if (!val) continue;
       const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-      style[camel] = val;
+      allProps[camel] = val;
     }
 
     if (mode === 'neumorphism') {
       const bgM = gen.css.match(/background:\s*(linear-gradient[^;]+);/);
-      if (bgM) style.background = bgM[1];
+      if (bgM) {
+        allProps.background = bgM[1];
+      }
     }
 
-    return style as CSSProperties;
+    // Normalize to avoid shorthand/non-shorthand conflicts
+    return normalizeStyleProperties(allProps);
   } catch {
     return {};
   }
