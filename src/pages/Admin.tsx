@@ -49,6 +49,7 @@ import {
   parseCustomCSSWithPassthrough,
   type CSSParsingDiagnostic,
 } from '@/hooks/use-passthrough-css-manager';
+import { normalizeStyleProperties } from '@/hooks/use-css-normalization';
 import {
   EnhancedCSSEditor,
   PassthroughPropertiesPanel,
@@ -1053,24 +1054,28 @@ function CSSCodeEditor({
       else if (mode === 'glow') gen = generateGlowCSS(merged as GlowSettings);
       else gen = generateNeumorphismCSS(merged as NeumorphismSettings);
 
-      const style: CSSProperties = {};
+      const allProps: Record<string, string> = {};
+
+      // Collect generated properties (convert kebab-case to camelCase)
       for (const [key, val] of Object.entries(gen.properties)) {
         if (!val) continue;
         const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-        (style as Record<string, string>)[camel] = val;
+        allProps[camel] = val;
       }
 
-      // Add passthrough properties
+      // Add passthrough properties (convert kebab-case to camelCase)
       for (const [key, val] of Object.entries(result.passthroughProperties)) {
         const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-        (style as Record<string, string>)[camel] = val;
+        allProps[camel] = val;
       }
 
       if (mode === 'neumorphism') {
         const bgMatch = gen.css.match(/background:\s*(linear-gradient[^;]+);/);
-        if (bgMatch) style.background = bgMatch[1];
+        if (bgMatch) allProps.background = bgMatch[1];
       }
-      return style;
+
+      // Normalize to avoid shorthand/non-shorthand conflicts
+      return normalizeStyleProperties(allProps);
     } catch {
       return {};
     }
