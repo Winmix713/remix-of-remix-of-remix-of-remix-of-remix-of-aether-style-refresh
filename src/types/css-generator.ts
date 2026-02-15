@@ -90,6 +90,7 @@ export interface EnhancedPreset {
   baseSettings: PresetSettings;
   userOverrides?: Partial<PresetSettings>;
   customCSS?: string;
+  passthroughCSS?: Record<string, string>;
   isCustomized: boolean;
   lastModified?: number;
 }
