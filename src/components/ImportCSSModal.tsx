@@ -5,7 +5,7 @@
  * Converts "ignored properties" to passthrough CSS that gets applied to preview.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -18,7 +18,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { AlertCircle, CheckCircle2, Upload, AlertTriangle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Upload, AlertTriangle, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   parseCustomCSSWithPassthrough,
@@ -44,6 +44,38 @@ export function ImportCSSModal({
 }: ImportCSSModalProps) {
   const [importedCSS, setImportedCSS] = useState('');
   const [activeTab, setActiveTab] = useState<'paste' | 'preview'>('paste');
+  const [hasAttemptedPaste, setHasAttemptedPaste] = useState(false);
+  const [autoPasteSuccess, setAutoPasteSuccess] = useState(false);
+
+  // Auto-paste from clipboard when modal opens
+  useEffect(() => {
+    if (isOpen && !hasAttemptedPaste) {
+      setHasAttemptedPaste(true);
+      navigator.clipboard.readText()
+        .then(text => {
+          if (text.trim()) {
+            setImportedCSS(text);
+            setAutoPasteSuccess(true);
+            // Switch to preview after successful paste
+            setTimeout(() => setActiveTab('preview'), 100);
+          }
+        })
+        .catch(() => {
+          // Silent fail - user will paste manually
+          setActiveTab('paste');
+          setAutoPasteSuccess(false);
+        });
+    }
+  }, [isOpen, hasAttemptedPaste]);
+
+  // Reset state when modal closes
+  const handleClose = () => {
+    setHasAttemptedPaste(false);
+    setImportedCSS('');
+    setActiveTab('paste');
+    setAutoPasteSuccess(false);
+    onClose();
+  };
 
   const parseResult = useMemo(() => {
     if (!importedCSS.trim()) {
@@ -111,7 +143,7 @@ export function ImportCSSModal({
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto bg-card border-border">
         <DialogHeader>
           <DialogTitle className="text-foreground">CSS importálása</DialogTitle>
@@ -119,6 +151,21 @@ export function ImportCSSModal({
             Másold be a CSS kódot, és az "ignored properties" automatikusan passthrough-ként kerülnek alkalmazásra.
           </DialogDescription>
         </DialogHeader>
+
+        {/* Auto-paste success banner */}
+        {autoPasteSuccess && (
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+            <Zap className="w-5 h-5 text-green-500 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-green-600">
+                CSS automatikusan beillesztve a vágólapról
+              </p>
+              <p className="text-[10px] text-green-600/70">
+                Nézd meg az "Előnézet" tabban a feldolgozás eredményét
+              </p>
+            </div>
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
           <TabsList className="grid w-full grid-cols-2">
@@ -324,7 +371,7 @@ color: #ffffff;`}
         <DialogFooter className="gap-2">
           <Button
             variant="outline"
-            onClick={onClose}
+            onClick={handleClose}
             className="border-border text-muted-foreground"
           >
             Mégse
