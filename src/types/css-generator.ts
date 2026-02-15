@@ -67,12 +67,31 @@ export interface GlowSettings {
   brightness: number;
 }
 
+export type PresetSettings =
+  | LiquidGlassSettings
+  | GlassmorphismSettings
+  | NeumorphismSettings
+  | GlowSettings;
+
 export interface Preset {
   id: string;
   name: string;
   mode: EffectMode;
   color: string;
-  settings: LiquidGlassSettings | GlassmorphismSettings | NeumorphismSettings | GlowSettings;
+  settings: PresetSettings;
+}
+
+/** Enhanced preset with base/override/customCSS layers */
+export interface EnhancedPreset {
+  id: string;
+  name: string;
+  mode: EffectMode;
+  color: string;
+  baseSettings: PresetSettings;
+  userOverrides?: Partial<PresetSettings>;
+  customCSS?: string;
+  isCustomized: boolean;
+  lastModified?: number;
 }
 
 export interface GeneratedCSS {
