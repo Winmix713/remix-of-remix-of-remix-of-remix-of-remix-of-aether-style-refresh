@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 260 20% 10%;
+    --foreground: 220 20% 90%;
+
+    --card: 260 18% 14%;
+    --card-foreground: 220 20% 90%;
+
+    --popover: 260 18% 14%;
+    --popover-foreground: 220 20% 90%;
+
+    --primary: 270 60% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 260 15% 20%;
+    --secondary-foreground: 220 20% 85%;
+
+    --muted: 260 12% 18%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 270 50% 50%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62.8% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 260 12% 22%;
+    --input: 260 12% 22%;
+    --ring: 270 60% 60%;
+
+    --radius: 0.75rem;
+
+    --sidebar-background: 260 20% 8%;
+    --sidebar-foreground: 220 20% 85%;
+    --sidebar-primary: 270 60% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 260 15% 16%;
+    --sidebar-accent-foreground: 220 20% 85%;
+    --sidebar-border: 260 12% 20%;
+    --sidebar-ring: 270 60% 60%;
+
+    --surface: 260 16% 12%;
+    --surface-hover: 260 14% 16%;
+    --glow: 270 80% 65%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 92% 20%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(260 20% 10%);
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(260 12% 25%);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(260 12% 35%);
+}
