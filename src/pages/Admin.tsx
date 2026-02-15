@@ -1,37 +1,8 @@
 /**
- * REFACTORED: pages/admin.tsx — Production-Ready Version
+ * REFACTORED: pages/Admin.tsx — Enhanced Preset Architecture
  *
- * CHANGES SUMMARY:
- * ─────────────────────────────────────────────────────────────────
- * 🔴 CRITICAL (P1) — Render-phase state setters removed
- *    CSSCodeEditor no longer mutates state during render. The old
- *    `if (mode !== prevMode) { setState(...) }` block has been
- *    replaced with a proper useEffect + useRef pattern.
- *
- * 🟠 HIGH (P2) — Clamp validation on all parsed CSS values
- *    New `clamp()` helper + per-mode `SETTING_RANGES` map ensure
- *    every numeric value coming out of the CSS parser is bounded
- *    within its slider range before it reaches the UI.
- *
- * 🟡 MEDIUM (P3) — Deep cloning for settings
- *    All preset copy paths (openEdit, openNew, duplicatePreset,
- *    handleModeChange) now use `structuredClone()` so nested
- *    objects can never alias each other.
- *
- * ADDITIONAL HARDENING:
- *    • crypto.randomUUID() for collision-free IDs
- *    • Clipboard writeText wrapped in try/catch
- *    • Preset name shown in delete-confirmation dialog
- *    • Confirmation dialog before resetToDefaults
- *    • Toast feedback for resetToDefaults
- *    • Fixed neumorphism shape-detection logic
- *    • border shorthand parsing handles all CSS formats
- *    • box-shadow multi-layer splitting won't break on rgba commas
- *    • livePreviewStyle only re-parses when cssText actually changes
- *    • Shape buttons are proper <button> with aria-pressed
- *    • Disabled "Apply" reflects correct state
- *    • Unified SettingRanges kept in a single source-of-truth object
- * ─────────────────────────────────────────────────────────────────
+ * Now uses EnhancedPreset with base/override merge strategy.
+ * Features: reset-to-base, commit customizations, customization indicators.
  */
 
 import {
@@ -64,7 +35,10 @@ import {
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { usePresetManager } from '@/hooks/use-preset-manager';
+import {
+  useEnhancedPresetManager,
+  mergeSettings,
+} from '@/hooks/use-enhanced-preset-manager';
 import {
   generateLiquidGlassCSS,
   generateGlassmorphismCSS,
@@ -72,8 +46,9 @@ import {
   generateGlowCSS,
 } from '@/hooks/use-css-generator';
 import type {
-  Preset,
+  EnhancedPreset,
   EffectMode,
+  PresetSettings,
   LiquidGlassSettings,
   GlassmorphismSettings,
   NeumorphismSettings,
@@ -90,6 +65,8 @@ import {
   Code,
   SlidersHorizontal,
   AlertTriangle,
+  Save,
+  Undo2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -97,76 +74,37 @@ import { toast } from 'sonner';
 // SECTION 1: Constants & Helpers
 // ─────────────────────────────────────────────────────────────────
 
-/**
- * [P2] Single source-of-truth for slider ranges.
- * Every numeric value parsed from CSS is clamped against these bounds
- * before it reaches any state update — ensuring sliders never receive
- * out-of-range values.
- */
 const SETTING_RANGES: Record<EffectMode, Record<string, [number, number]>> = {
   'liquid-glass': {
-    blur:               [0,   60],
-    opacity:            [0,  100],
-    borderRadius:       [0,   50],
-    bgAlpha:            [0,  100],
-    borderAlpha:        [0,  100],
-    borderWidth:        [0,    5],
-    refractionIntensity:[0,  100],
-    shadowX:            [-20, 20],
-    shadowY:            [-20, 20],
-    shadowBlur:         [0,   80],
-    shadowSpread:       [-20, 20],
-    shadowAlpha:        [0,  100],
-    saturation:         [50, 200],
-    brightness:         [50, 200],
+    blur: [0, 60], opacity: [0, 100], borderRadius: [0, 50],
+    bgAlpha: [0, 100], borderAlpha: [0, 100], borderWidth: [0, 5],
+    refractionIntensity: [0, 100],
+    shadowX: [-20, 20], shadowY: [-20, 20], shadowBlur: [0, 80],
+    shadowSpread: [-20, 20], shadowAlpha: [0, 100],
+    saturation: [50, 200], brightness: [50, 200],
   },
   'glassmorphism': {
-    blur:               [0,   50],
-    opacity:            [0,  100],
-    borderRadius:       [0,   50],
-    bgAlpha:            [0,  100],
-    borderAlpha:        [0,  100],
-    borderWidth:        [0,    5],
-    shadowX:            [-20, 20],
-    shadowY:            [-20, 20],
-    shadowBlur:         [0,   60],
-    shadowAlpha:        [0,  100],
-    saturation:         [50, 200],
+    blur: [0, 50], opacity: [0, 100], borderRadius: [0, 50],
+    bgAlpha: [0, 100], borderAlpha: [0, 100], borderWidth: [0, 5],
+    shadowX: [-20, 20], shadowY: [-20, 20], shadowBlur: [0, 60],
+    shadowAlpha: [0, 100], saturation: [50, 200],
   },
   'neumorphism': {
-    borderRadius: [0,   50],
-    distance:     [1,   20],
-    intensity:    [1,   50],
-    blur:         [1,   40],
+    borderRadius: [0, 50], distance: [1, 20], intensity: [1, 50], blur: [1, 40],
   },
   'glow': {
-    borderRadius:   [0,  100],
-    bgAlpha:        [0,  100],
-    glowIntensity:  [0,  100],
-    glowSpread:     [0,  100],
-    glowBlur:       [0,  200],
-    innerGlow:      [0,  100],
-    borderAlpha:    [0,  100],
-    borderWidth:    [0,    5],
-    blur:           [0,   40],
-    saturation:     [50, 300],
-    brightness:     [50, 300],
+    borderRadius: [0, 100], bgAlpha: [0, 100],
+    glowIntensity: [0, 100], glowSpread: [0, 100], glowBlur: [0, 200],
+    innerGlow: [0, 100], borderAlpha: [0, 100], borderWidth: [0, 5],
+    blur: [0, 40], saturation: [50, 300], brightness: [50, 300],
   },
 };
 
-/** Clamp n within [min, max] */
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-/**
- * [P2] Apply SETTING_RANGES clamps to every numeric field in a settings object.
- * Unknown keys (e.g. color strings) are passed through unchanged.
- */
-function clampSettings(
-  mode: EffectMode,
-  settings: Preset['settings'],
-): Preset['settings'] {
+function clampSettings(mode: EffectMode, settings: PresetSettings): PresetSettings {
   const ranges = SETTING_RANGES[mode] ?? {};
   const result = { ...settings } as Record<string, unknown>;
   for (const [key, value] of Object.entries(result)) {
@@ -175,38 +113,24 @@ function clampSettings(
       result[key] = clamp(value, min, max);
     }
   }
-  return result as unknown as Preset['settings'];
+  return result as unknown as PresetSettings;
 }
 
-/**
- * [P3] Deep-clone helper. Uses structuredClone (available in all modern
- * environments; falls back to JSON round-trip for safety).
- */
 function deepClone<T>(obj: T): T {
   if (typeof structuredClone === 'function') return structuredClone(obj);
   return JSON.parse(JSON.stringify(obj));
 }
 
-/**
- * Collision-free ID generator.
- * Prefers crypto.randomUUID(); falls back to timestamp + random for
- * environments where crypto is unavailable (very old browsers/SSR).
- */
 function generateId(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
-
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   const uid =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID().slice(0, 8)
       : Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-
   return `${slug}-${uid}`;
 }
 
-const defaultSettingsByMode: Record<EffectMode, Preset['settings']> = {
+const defaultSettingsByMode: Record<EffectMode, PresetSettings> = {
   'liquid-glass': {
     blur: 20, opacity: 80, borderRadius: 16,
     bgColor: '#ffffff', bgAlpha: 12,
@@ -241,23 +165,16 @@ const defaultSettingsByMode: Record<EffectMode, Preset['settings']> = {
 // SECTION 2: CSS Parsing Utilities
 // ─────────────────────────────────────────────────────────────────
 
-function generateCSSForPreset(mode: EffectMode, settings: Preset['settings']): string {
-  if (mode === 'liquid-glass')
-    return generateLiquidGlassCSS(settings as LiquidGlassSettings).css;
-  if (mode === 'glassmorphism')
-    return generateGlassmorphismCSS(settings as GlassmorphismSettings).css;
-  if (mode === 'glow')
-    return generateGlowCSS(settings as GlowSettings).css;
+function generateCSSForPreset(mode: EffectMode, settings: PresetSettings): string {
+  if (mode === 'liquid-glass')  return generateLiquidGlassCSS(settings as LiquidGlassSettings).css;
+  if (mode === 'glassmorphism') return generateGlassmorphismCSS(settings as GlassmorphismSettings).css;
+  if (mode === 'glow')          return generateGlowCSS(settings as GlowSettings).css;
   return generateNeumorphismCSS(settings as NeumorphismSettings).css;
 }
 
 function parseAllCSSProperties(css: string): Record<string, string> {
   const props: Record<string, string> = {};
-  // Strip selector wrapper and outer braces
   const inner = css.replace(/^[^{]*\{/, '').replace(/\}[^}]*$/, '').trim();
-
-  // Split on semicolons that are NOT inside parentheses, to handle
-  // multi-value functions like rgba(), calc(), linear-gradient()
   const declarations: string[] = [];
   let depth = 0;
   let current = '';
@@ -272,7 +189,6 @@ function parseAllCSSProperties(css: string): Record<string, string> {
     }
   }
   if (current.trim()) declarations.push(current.trim());
-
   for (const decl of declarations) {
     const colonIdx = decl.indexOf(':');
     if (colonIdx === -1) continue;
@@ -284,31 +200,15 @@ function parseAllCSSProperties(css: string): Record<string, string> {
 }
 
 function parseRgba(val: string): { r: number; g: number; b: number; a: number } | null {
-  const m = val.match(
-    /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/,
-  );
+  const m = val.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
   if (!m) return null;
-  return {
-    r: parseInt(m[1], 10),
-    g: parseInt(m[2], 10),
-    b: parseInt(m[3], 10),
-    a: m[4] !== undefined ? parseFloat(m[4]) : 1,
-  };
+  return { r: parseInt(m[1], 10), g: parseInt(m[2], 10), b: parseInt(m[3], 10), a: m[4] !== undefined ? parseFloat(m[4]) : 1 };
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
-  return (
-    '#' +
-    [r, g, b]
-      .map((c) => clamp(c, 0, 255).toString(16).padStart(2, '0'))
-      .join('')
-  );
+  return '#' + [r, g, b].map((c) => clamp(c, 0, 255).toString(16).padStart(2, '0')).join('');
 }
 
-/**
- * Split a box-shadow value into individual shadow layers.
- * Uses a paren-depth counter so commas inside rgba() don't split layers.
- */
 function splitBoxShadowLayers(val: string): string[] {
   const layers: string[] = [];
   let depth = 0;
@@ -316,54 +216,30 @@ function splitBoxShadowLayers(val: string): string[] {
   for (const ch of val) {
     if (ch === '(') depth++;
     else if (ch === ')') depth--;
-    if (ch === ',' && depth === 0) {
-      layers.push(current.trim());
-      current = '';
-    } else {
-      current += ch;
-    }
+    if (ch === ',' && depth === 0) { layers.push(current.trim()); current = ''; }
+    else { current += ch; }
   }
   if (current.trim()) layers.push(current.trim());
   return layers;
 }
 
-interface ParsedShadow {
-  x: number;
-  y: number;
-  blur: number;
-  spread?: number;
-  color?: string;
-  alpha?: number;
-  inset: boolean;
-}
+interface ParsedShadow { x: number; y: number; blur: number; spread?: number; color?: string; alpha?: number; inset: boolean; }
 
 function parseBoxShadowLayer(layer: string): ParsedShadow | null {
   const inset = /\binset\b/.test(layer);
   const cleaned = layer.replace(/\binset\b/, '').trim();
-
-  // Pattern: <x>px <y>px <blur>px [<spread>px] <color>
-  const m = cleaned.match(
-    /(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px(?:\s+(-?[\d.]+)px)?\s+(rgba?\([^)]+\))/,
-  );
+  const m = cleaned.match(/(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px(?:\s+(-?[\d.]+)px)?\s+(rgba?\([^)]+\))/);
   if (!m) return null;
-
   const rgba = parseRgba(m[5]);
   return {
-    x:      parseFloat(m[1]),
-    y:      parseFloat(m[2]),
-    blur:   parseFloat(m[3]),
+    x: parseFloat(m[1]), y: parseFloat(m[2]), blur: parseFloat(m[3]),
     spread: m[4] !== undefined ? parseFloat(m[4]) : undefined,
-    color:  rgba ? rgbToHex(rgba.r, rgba.g, rgba.b) : undefined,
-    alpha:  rgba ? Math.round(rgba.a * 100) : undefined,
-    inset,
+    color: rgba ? rgbToHex(rgba.r, rgba.g, rgba.b) : undefined,
+    alpha: rgba ? Math.round(rgba.a * 100) : undefined, inset,
   };
 }
 
-function parseBackdropFilter(val: string): {
-  blur?: number;
-  saturate?: number;
-  brightness?: number;
-} {
+function parseBackdropFilter(val: string) {
   const result: { blur?: number; saturate?: number; brightness?: number } = {};
   const blurM = val.match(/blur\(\s*([\d.]+)px\s*\)/);
   if (blurM) result.blur = parseFloat(blurM[1]);
@@ -374,235 +250,134 @@ function parseBackdropFilter(val: string): {
   return result;
 }
 
-function parseBorder(val: string): {
-  width?: number;
-  style?: string;
-  color?: string;
-  alpha?: number;
-} {
-  const result: { width?: number; style?: string; color?: string; alpha?: number } = {};
+function parseBorder(val: string) {
+  const result: { width?: number; color?: string; alpha?: number } = {};
   const widthM = val.match(/([\d.]+)px/);
   if (widthM) result.width = parseFloat(widthM[1]);
-  // [HARDENING] Also capture border-style keyword
-  const styleM = val.match(/\b(solid|dashed|dotted|double|groove|ridge|inset|outset|none)\b/);
-  if (styleM) result.style = styleM[1];
   const rgba = parseRgba(val);
-  if (rgba) {
-    result.color = rgbToHex(rgba.r, rgba.g, rgba.b);
-    result.alpha = Math.round(rgba.a * 100);
-  }
+  if (rgba) { result.color = rgbToHex(rgba.r, rgba.g, rgba.b); result.alpha = Math.round(rgba.a * 100); }
   return result;
 }
 
 /**
- * [P2 + HARDENING] Parse CSS text back to settings, then clamp every
- * numeric value within its declared slider range.
+ * Parse CSS text → SELECTIVE overrides only.
+ * Returns a Partial<PresetSettings> containing ONLY properties found in the CSS.
+ * This is the key difference from the old approach: missing properties stay undefined.
  */
-function robustParseCSSToSettings(
+function parseCSSToOverrides(
   mode: EffectMode,
   css: string,
-  currentSettings: Preset['settings'],
-): Preset['settings'] | null {
+): Partial<PresetSettings> | null {
   try {
     const props = parseAllCSSProperties(css);
     if (Object.keys(props).length === 0) return null;
 
-    // ── Liquid Glass ───────────────────────────────────────────
-    if (mode === 'liquid-glass') {
-      const s = deepClone(currentSettings) as LiquidGlassSettings;
+    const overrides: Record<string, number | string> = {};
 
-      if (props['background']) {
-        const rgba = parseRgba(props['background']);
-        if (rgba) {
-          s.bgColor = rgbToHex(rgba.r, rgba.g, rgba.b);
-          s.bgAlpha = Math.round(rgba.a * 100);
+    // Background
+    if (props['background']) {
+      const rgba = parseRgba(props['background']);
+      if (rgba) {
+        overrides.bgColor = rgbToHex(rgba.r, rgba.g, rgba.b);
+        overrides.bgAlpha = Math.round(rgba.a * 100);
+      }
+      // Neumorphism gradient
+      if (mode === 'neumorphism' && props['background'].includes('linear-gradient')) {
+        const angleM = props['background'].match(/linear-gradient\(\s*(-?[\d.]+deg)/);
+        if (angleM) {
+          const angle = parseFloat(angleM[1]);
+          if (Math.abs(angle - 135) < 10) overrides.shape = 'convex';
+          else if (Math.abs(angle - 45) < 10) overrides.shape = 'concave';
+        }
+      } else if (mode === 'neumorphism') {
+        const hexM = props['background'].match(/#[0-9a-fA-F]{6}/);
+        if (hexM) overrides.bgColor = hexM[0];
+        else {
+          const rgba2 = parseRgba(props['background']);
+          if (rgba2) overrides.bgColor = rgbToHex(rgba2.r, rgba2.g, rgba2.b);
         }
       }
-      const bdFilter = props['backdrop-filter'] ?? props['-webkit-backdrop-filter'];
-      if (bdFilter) {
-        const f = parseBackdropFilter(bdFilter);
-        if (f.blur       !== undefined) s.blur       = f.blur;
-        if (f.saturate   !== undefined) s.saturation = f.saturate;
-        if (f.brightness !== undefined) s.brightness = f.brightness;
-      }
-      if (props['border-radius']) {
-        const n = parseFloat(props['border-radius']);
-        if (!isNaN(n)) s.borderRadius = n;
-      }
-      if (props['border']) {
-        const b = parseBorder(props['border']);
-        if (b.width !== undefined) s.borderWidth = b.width;
-        if (b.color)               s.borderColor = b.color;
-        if (b.alpha !== undefined) s.borderAlpha = b.alpha;
-      }
-      if (props['box-shadow']) {
-        const layers = splitBoxShadowLayers(props['box-shadow']);
-        const sh = parseBoxShadowLayer(layers[0] ?? '');
-        if (sh) {
-          s.shadowX    = sh.x;
-          s.shadowY    = sh.y;
-          s.shadowBlur = sh.blur;
-          if (sh.spread !== undefined) s.shadowSpread = sh.spread;
-          if (sh.color)                s.shadowColor  = sh.color;
-          if (sh.alpha !== undefined)  s.shadowAlpha  = sh.alpha;
-        }
-      }
-      return clampSettings(mode, s);
     }
 
-    // ── Glassmorphism ──────────────────────────────────────────
-    if (mode === 'glassmorphism') {
-      const s = deepClone(currentSettings) as GlassmorphismSettings;
-
-      if (props['background']) {
-        const rgba = parseRgba(props['background']);
-        if (rgba) {
-          s.bgColor = rgbToHex(rgba.r, rgba.g, rgba.b);
-          s.bgAlpha = Math.round(rgba.a * 100);
-        }
-      }
-      const bdFilter = props['backdrop-filter'] ?? props['-webkit-backdrop-filter'];
-      if (bdFilter) {
-        const f = parseBackdropFilter(bdFilter);
-        if (f.blur     !== undefined) s.blur       = f.blur;
-        if (f.saturate !== undefined) s.saturation = f.saturate;
-      }
-      if (props['border-radius']) {
-        const n = parseFloat(props['border-radius']);
-        if (!isNaN(n)) s.borderRadius = n;
-      }
-      if (props['border']) {
-        const b = parseBorder(props['border']);
-        if (b.width !== undefined) s.borderWidth = b.width;
-        if (b.color)               s.borderColor = b.color;
-        if (b.alpha !== undefined) s.borderAlpha = b.alpha;
-      }
-      if (props['box-shadow']) {
-        const layers = splitBoxShadowLayers(props['box-shadow']);
-        const sh = parseBoxShadowLayer(layers[0] ?? '');
-        if (sh) {
-          s.shadowX    = sh.x;
-          s.shadowY    = sh.y;
-          s.shadowBlur = sh.blur;
-          if (sh.color)               s.shadowColor = sh.color;
-          if (sh.alpha !== undefined) s.shadowAlpha = sh.alpha;
-        }
-      }
-      return clampSettings(mode, s);
+    // Backdrop filter
+    const bdFilter = props['backdrop-filter'] ?? props['-webkit-backdrop-filter'];
+    if (bdFilter) {
+      const f = parseBackdropFilter(bdFilter);
+      if (f.blur !== undefined) overrides.blur = f.blur;
+      if (f.saturate !== undefined) overrides.saturation = f.saturate;
+      if (f.brightness !== undefined) overrides.brightness = f.brightness;
     }
 
-    // ── Glow ─────────────────────────────────────────────────────
-    if (mode === 'glow') {
-      const s = deepClone(currentSettings) as GlowSettings;
+    // Border radius
+    if (props['border-radius']) {
+      const n = parseFloat(props['border-radius']);
+      if (!isNaN(n)) overrides.borderRadius = n;
+    }
 
-      if (props['background']) {
-        const rgba = parseRgba(props['background']);
-        if (rgba) {
-          s.bgColor = rgbToHex(rgba.r, rgba.g, rgba.b);
-          s.bgAlpha = Math.round(rgba.a * 100);
-        }
-      }
-      if (props['border-radius']) {
-        const n = parseFloat(props['border-radius']);
-        if (!isNaN(n)) s.borderRadius = n;
-      }
-      if (props['border']) {
-        const b = parseBorder(props['border']);
-        if (b.width !== undefined) s.borderWidth = b.width;
-        if (b.color)               s.borderColor = b.color;
-        if (b.alpha !== undefined) s.borderAlpha = b.alpha;
-      }
-      const bdFilter = props['backdrop-filter'] ?? props['-webkit-backdrop-filter'];
-      if (bdFilter) {
-        const f = parseBackdropFilter(bdFilter);
-        if (f.blur       !== undefined) s.blur       = f.blur;
-        if (f.saturate   !== undefined) s.saturation = f.saturate;
-        if (f.brightness !== undefined) s.brightness = f.brightness;
-      }
-      if (props['box-shadow']) {
-        const layers = splitBoxShadowLayers(props['box-shadow']);
+    // Border
+    if (props['border']) {
+      const b = parseBorder(props['border']);
+      if (b.width !== undefined) overrides.borderWidth = b.width;
+      if (b.color) overrides.borderColor = b.color;
+      if (b.alpha !== undefined) overrides.borderAlpha = b.alpha;
+    }
+
+    // Box shadow
+    if (props['box-shadow']) {
+      const layers = splitBoxShadowLayers(props['box-shadow']);
+
+      if (mode === 'glow') {
         const outer = parseBoxShadowLayer(layers[0] ?? '');
         if (outer) {
-          s.glowBlur   = outer.blur;
-          s.glowSpread = outer.spread ?? s.glowSpread;
-          if (outer.color) s.glowColor = outer.color;
-          if (outer.alpha !== undefined) s.glowIntensity = Math.round(outer.alpha / 0.6);
+          overrides.glowBlur = outer.blur;
+          if (outer.spread !== undefined) overrides.glowSpread = outer.spread;
+          if (outer.color) overrides.glowColor = outer.color;
+          if (outer.alpha !== undefined) overrides.glowIntensity = Math.round(outer.alpha / 0.6);
         }
-        // Parse inset shadow for innerGlow
         for (const layer of layers) {
           if (/\binset\b/.test(layer)) {
             const insetSh = parseBoxShadowLayer(layer);
-            if (insetSh && insetSh.alpha !== undefined) {
-              s.innerGlow = Math.round(insetSh.alpha / 0.5 * 100);
-            }
+            if (insetSh?.alpha !== undefined) overrides.innerGlow = Math.round(insetSh.alpha / 0.5 * 100);
           }
         }
-      }
-      return clampSettings(mode, s);
-    }
-
-    // ── Neumorphism ────────────────────────────────────────────
-    {
-      const s = deepClone(currentSettings) as NeumorphismSettings;
-
-      if (props['border-radius']) {
-        const n = parseFloat(props['border-radius']);
-        if (!isNaN(n)) s.borderRadius = n;
-      }
-
-      if (props['background']) {
-        const bg = props['background'];
-
-        if (bg.includes('linear-gradient')) {
-          /**
-           * [HARDENING] Fixed neumorphism shape detection.
-           * The old indexOf/lastIndexOf comparison was unreliable.
-           * Instead we read the gradient angle explicitly:
-           *   135deg → convex  (light top-left, dark bottom-right)
-           *    45deg → concave (dark top-left, light bottom-right)
-           */
-          const angleM = bg.match(/linear-gradient\(\s*(-?[\d.]+deg)/);
-          if (angleM) {
-            const angle = parseFloat(angleM[1]);
-            if (Math.abs(angle - 135) < 10) s.shape = 'convex';
-            else if (Math.abs(angle - 45) < 10) s.shape = 'concave';
-          }
-        } else {
-          const hexM = bg.match(/#[0-9a-fA-F]{6}/);
-          if (hexM) s.bgColor = hexM[0];
-          else {
-            const rgba = parseRgba(bg);
-            if (rgba) s.bgColor = rgbToHex(rgba.r, rgba.g, rgba.b);
-          }
-        }
-      }
-
-      if (props['box-shadow']) {
+      } else if (mode === 'neumorphism') {
         const isInset = /\binset\b/.test(props['box-shadow']);
-        if (isInset) s.shape = 'pressed';
-
-        /**
-         * [HARDENING] Use proper layer splitter instead of simple split(',').
-         * This avoids rgba commas incorrectly splitting a layer.
-         */
-        const layers = splitBoxShadowLayers(props['box-shadow']);
-
-        const firstLayer = parseBoxShadowLayer(layers[0] ?? '');
-        if (firstLayer) {
-          s.distance = Math.round(Math.abs(firstLayer.x));
-          s.blur     = Math.round(firstLayer.blur);
-          if (firstLayer.alpha !== undefined) s.intensity = firstLayer.alpha;
-          if (firstLayer.color)               s.darkColor  = firstLayer.color;
+        if (isInset) overrides.shape = 'pressed';
+        const first = parseBoxShadowLayer(layers[0] ?? '');
+        if (first) {
+          overrides.distance = Math.round(Math.abs(first.x));
+          overrides.blur = Math.round(first.blur);
+          if (first.alpha !== undefined) overrides.intensity = first.alpha;
+          if (first.color) overrides.darkColor = first.color;
         }
-
         if (layers.length >= 2) {
-          const secondLayer = parseBoxShadowLayer(layers[1] ?? '');
-          if (secondLayer?.color) s.lightColor = secondLayer.color;
+          const second = parseBoxShadowLayer(layers[1] ?? '');
+          if (second?.color) overrides.lightColor = second.color;
+        }
+      } else {
+        // liquid-glass / glassmorphism
+        const sh = parseBoxShadowLayer(layers[0] ?? '');
+        if (sh) {
+          overrides.shadowX = sh.x;
+          overrides.shadowY = sh.y;
+          overrides.shadowBlur = sh.blur;
+          if (sh.spread !== undefined) overrides.shadowSpread = sh.spread;
+          if (sh.color) overrides.shadowColor = sh.color;
+          if (sh.alpha !== undefined) overrides.shadowAlpha = sh.alpha;
         }
       }
-
-      return clampSettings(mode, s);
     }
+
+    // Clamp numeric values
+    const ranges = SETTING_RANGES[mode] ?? {};
+    for (const [key, value] of Object.entries(overrides)) {
+      if (typeof value === 'number' && ranges[key]) {
+        const [min, max] = ranges[key];
+        overrides[key] = clamp(value, min, max);
+      }
+    }
+
+    return Object.keys(overrides).length > 0 ? overrides as Partial<PresetSettings> : null;
   } catch (err) {
     console.error('[admin] CSS parse error:', err);
     return null;
@@ -614,57 +389,120 @@ function robustParseCSSToSettings(
 // ─────────────────────────────────────────────────────────────────
 
 export default function Admin() {
-  const { presets, addPreset, updatePreset, deletePreset, reorderPresets, resetToDefaults } =
-    usePresetManager();
+  const {
+    presets,
+    addPreset,
+    updatePreset,
+    deletePreset,
+    reorderPresets,
+    resetToDefaults,
+    applyUserOverride,
+    applyBulkOverrides,
+    resetToBase,
+    commitCustomizations,
+    getEffectiveSettings,
+    hasUnsavedChanges,
+  } = useEnhancedPresetManager();
 
-  const [editingPreset, setEditingPreset] = useState<Preset | null>(null);
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(false);
+  // Temporary state for new/editing preset metadata
+  const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('#a78bfa');
+  const [editMode, setEditMode] = useState<EffectMode>('liquid-glass');
+
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  // [UX] Separate confirmation state for destructive reset
   const [resetConfirm, setResetConfirm] = useState(false);
+
+  const editingPreset = presets.find((p) => p.id === editingPresetId) ?? null;
+
+  const effectiveSettings = useMemo(() => {
+    if (!editingPresetId) return null;
+    return getEffectiveSettings(editingPresetId);
+  }, [editingPresetId, getEffectiveSettings]);
 
   const openNew = () => {
     setIsNew(true);
-    setEditingPreset({
-      id: '',
+    const id = generateId('new-preset');
+    const mode: EffectMode = 'liquid-glass';
+    addPreset({
       name: '',
-      mode: 'liquid-glass',
+      mode,
       color: '#a78bfa',
-      // [P3] Deep-clone default settings to prevent aliasing
-      settings: deepClone(defaultSettingsByMode['liquid-glass']) as LiquidGlassSettings,
+      baseSettings: deepClone(defaultSettingsByMode[mode]),
     });
+    // Find the newly added preset (last one)
+    setEditName('');
+    setEditColor('#a78bfa');
+    setEditMode(mode);
+    // We need to use a timeout because addPreset is async via setState
+    setTimeout(() => {
+      // The preset was just added; we stored a random id
+    }, 0);
+    setEditingPresetId(id);
   };
 
-  const openEdit = (preset: Preset) => {
+  // Better approach: create preset inline
+  const openNewPreset = useCallback(() => {
+    setIsNew(true);
+    const mode: EffectMode = 'liquid-glass';
+    const id = generateId('new');
+    setEditName('');
+    setEditColor('#a78bfa');
+    setEditMode(mode);
+    addPreset({
+      id,
+      name: '',
+      mode,
+      color: '#a78bfa',
+      baseSettings: deepClone(defaultSettingsByMode[mode]),
+    });
+    setEditingPresetId(id);
+  }, [addPreset]);
+
+  const openEdit = (preset: EnhancedPreset) => {
     setIsNew(false);
-    // [P3] Deep-clone the entire preset so edits don't mutate the list
-    setEditingPreset(deepClone(preset));
+    setEditName(preset.name);
+    setEditColor(preset.color);
+    setEditMode(preset.mode);
+    setEditingPresetId(preset.id);
   };
 
-  const duplicatePreset = (preset: Preset) => {
-    const newPreset: Preset = {
-      // [P3] Deep-clone settings to prevent shared references
-      ...deepClone(preset),
-      id:   generateId(preset.name + '-copy'),
+  const duplicatePreset = (preset: EnhancedPreset) => {
+    const newId = generateId(preset.name + '-copy');
+    addPreset({
+      id: newId,
       name: preset.name + ' (másolat)',
-    };
-    addPreset(newPreset);
+      mode: preset.mode,
+      color: preset.color,
+      baseSettings: deepClone(preset.baseSettings),
+      userOverrides: preset.userOverrides ? deepClone(preset.userOverrides) : undefined,
+      customCSS: preset.customCSS,
+    });
     toast.success('Preset duplikálva');
   };
 
   const handleSave = () => {
-    if (!editingPreset || !editingPreset.name.trim()) {
+    if (!editName.trim()) {
       toast.error('Adj nevet a presetnek!');
       return;
     }
-    if (isNew) {
-      addPreset({ ...editingPreset, id: generateId(editingPreset.name) });
-      toast.success('Preset létrehozva');
-    } else {
-      updatePreset(editingPreset.id, editingPreset);
-      toast.success('Preset frissítve');
+    if (editingPresetId) {
+      updatePreset(editingPresetId, {
+        name: editName,
+        color: editColor,
+        mode: editMode,
+      });
+      toast.success(isNew ? 'Preset létrehozva' : 'Preset frissítve');
     }
-    setEditingPreset(null);
+    setEditingPresetId(null);
+  };
+
+  const handleCancelEdit = () => {
+    if (isNew && editingPresetId) {
+      deletePreset(editingPresetId);
+    }
+    setEditingPresetId(null);
   };
 
   const handleDelete = (id: string) => {
@@ -674,33 +512,27 @@ export default function Admin() {
   };
 
   const handleModeChange = (mode: EffectMode) => {
-    if (!editingPreset) return;
-    setEditingPreset({
-      ...editingPreset,
+    if (!editingPresetId) return;
+    setEditMode(mode);
+    updatePreset(editingPresetId, {
       mode,
-      // [P3] Deep-clone mode defaults so different presets don't share refs
-      settings: deepClone(defaultSettingsByMode[mode]),
+      baseSettings: deepClone(defaultSettingsByMode[mode]),
+      userOverrides: undefined,
+      customCSS: undefined,
+      isCustomized: false,
     });
   };
 
   const updateSettingField = useCallback(
     (key: string, value: number | string) => {
-      if (!editingPreset) return;
-      setEditingPreset((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          settings: { ...prev.settings, [key]: value },
-        };
-      });
+      if (!editingPresetId) return;
+      applyUserOverride(editingPresetId, key, value);
     },
-    [editingPreset],
+    [editingPresetId, applyUserOverride],
   );
 
-  // [UX] Find name of the preset pending deletion for the dialog
   const deleteTargetName = presets.find((p) => p.id === deleteConfirm)?.name ?? '';
 
-  // [UX] Confirmed reset handler with toast feedback
   const handleConfirmedReset = () => {
     resetToDefaults();
     setResetConfirm(false);
@@ -719,7 +551,6 @@ export default function Admin() {
             </p>
           </div>
           <div className="flex gap-2">
-            {/* [UX] Open confirmation dialog before overwriting all presets */}
             <Button
               variant="outline"
               size="sm"
@@ -728,7 +559,7 @@ export default function Admin() {
             >
               <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Alapértelmezés
             </Button>
-            <Button size="sm" onClick={openNew} className="bg-primary text-primary-foreground">
+            <Button size="sm" onClick={openNewPreset} className="bg-primary text-primary-foreground">
               <Plus className="mr-1.5 h-3.5 w-3.5" /> Új preset
             </Button>
           </div>
@@ -742,16 +573,21 @@ export default function Admin() {
               className="flex items-center gap-3 rounded-lg border border-border bg-card p-3 hover:bg-card/80 transition-colors"
             >
               <div
-                className="h-10 w-10 rounded-lg shrink-0 shadow-sm"
+                className="h-10 w-10 rounded-lg shrink-0 shadow-sm relative"
                 style={{
                   background: `linear-gradient(135deg, ${preset.color}40, ${preset.color}90)`,
                   border: `1px solid ${preset.color}50`,
                 }}
-              />
+              >
+                {/* Customization indicator dot */}
+                {preset.isCustomized && (
+                  <div className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-accent border-2 border-card" />
+                )}
+              </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm text-foreground truncate">
-                    {preset.name}
+                    {preset.name || '(névtelen)'}
                   </span>
                   <Badge
                     variant="outline"
@@ -759,10 +595,42 @@ export default function Admin() {
                   >
                     {preset.mode.replace('-', ' ')}
                   </Badge>
+                  {preset.isCustomized && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] px-1.5 py-0 border-accent text-accent-foreground bg-accent/10"
+                    >
+                      módosított
+                    </Badge>
+                  )}
                 </div>
                 <span className="text-[10px] text-muted-foreground font-mono">{preset.id}</span>
               </div>
               <div className="flex items-center gap-1">
+                {/* Reset to base button - only if customized */}
+                {preset.isCustomized && (
+                  <Button
+                    variant="ghost" size="icon"
+                    className="h-8 w-8 text-accent-foreground hover:text-foreground"
+                    onClick={() => { resetToBase(preset.id); toast.success('Visszaállítva az alap értékekre'); }}
+                    aria-label="Visszaállítás"
+                    title="Visszaállítás az alap értékekre"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {/* Commit customizations */}
+                {preset.isCustomized && (
+                  <Button
+                    variant="ghost" size="icon"
+                    className="h-8 w-8 text-accent-foreground hover:text-foreground"
+                    onClick={() => { commitCustomizations(preset.id); toast.success('Módosítások véglegesítve'); }}
+                    aria-label="Véglegesítés"
+                    title="Módosítások véglegesítése (új alap)"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost" size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-foreground"
@@ -818,7 +686,7 @@ export default function Admin() {
       </main>
 
       {/* ── Edit / Create dialog ──────────────────────────────── */}
-      <Dialog open={!!editingPreset} onOpenChange={(open) => !open && setEditingPreset(null)}>
+      <Dialog open={!!editingPresetId} onOpenChange={(open) => !open && handleCancelEdit()}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto bg-card border-border">
           <DialogHeader>
             <DialogTitle className="text-foreground">
@@ -826,13 +694,13 @@ export default function Admin() {
             </DialogTitle>
           </DialogHeader>
 
-          {editingPreset && (
+          {editingPreset && effectiveSettings && (
             <div className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Név</Label>
                 <Input
-                  value={editingPreset.name}
-                  onChange={(e) => setEditingPreset({ ...editingPreset, name: e.target.value })}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
                   placeholder="pl. Crystal Wave"
                   className="bg-secondary border-border"
                 />
@@ -840,10 +708,7 @@ export default function Admin() {
 
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Mód</Label>
-                <Select
-                  value={editingPreset.mode}
-                  onValueChange={(v) => handleModeChange(v as EffectMode)}
-                >
+                <Select value={editMode} onValueChange={(v) => handleModeChange(v as EffectMode)}>
                   <SelectTrigger className="bg-secondary border-border">
                     <SelectValue />
                   </SelectTrigger>
@@ -861,24 +726,52 @@ export default function Admin() {
                 <div className="flex items-center gap-3">
                   <input
                     type="color"
-                    value={editingPreset.color}
-                    onChange={(e) => setEditingPreset({ ...editingPreset, color: e.target.value })}
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
                     className="h-8 w-8 cursor-pointer rounded border border-border bg-transparent"
                   />
                   <Input
-                    value={editingPreset.color}
-                    onChange={(e) => setEditingPreset({ ...editingPreset, color: e.target.value })}
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
                     className="h-8 w-24 font-mono text-xs bg-secondary border-border"
                   />
                   <div
                     className="h-10 w-10 rounded-lg shadow-sm"
                     style={{
-                      background: `linear-gradient(135deg, ${editingPreset.color}40, ${editingPreset.color}90)`,
-                      border: `1px solid ${editingPreset.color}50`,
+                      background: `linear-gradient(135deg, ${editColor}40, ${editColor}90)`,
+                      border: `1px solid ${editColor}50`,
                     }}
                   />
                 </div>
               </div>
+
+              {/* Customization status banner */}
+              {editingPreset.isCustomized && (
+                <div className="flex items-center gap-2 rounded-md bg-accent/10 border border-accent/30 p-2.5">
+                  <AlertTriangle className="h-4 w-4 text-accent-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-accent-foreground font-medium">
+                      Módosítások vannak az alap presethez képest
+                    </p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button
+                      variant="ghost" size="sm"
+                      className="h-7 text-[10px]"
+                      onClick={() => { resetToBase(editingPresetId!); toast.success('Visszaállítva'); }}
+                    >
+                      <Undo2 className="mr-1 h-3 w-3" /> Reset
+                    </Button>
+                    <Button
+                      variant="ghost" size="sm"
+                      className="h-7 text-[10px]"
+                      onClick={() => { commitCustomizations(editingPresetId!); toast.success('Véglegesítve'); }}
+                    >
+                      <Save className="mr-1 h-3 w-3" /> Véglegesít
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               <div className="border-t border-border pt-3 space-y-3">
                 <Tabs defaultValue="sliders" className="w-full">
@@ -892,18 +785,20 @@ export default function Admin() {
                   </TabsList>
                   <TabsContent value="sliders" className="mt-3">
                     <PresetSettingsEditor
-                      mode={editingPreset.mode}
-                      settings={editingPreset.settings}
+                      mode={editMode}
+                      settings={effectiveSettings}
                       updateSetting={updateSettingField}
                     />
                   </TabsContent>
                   <TabsContent value="css" className="mt-3">
                     <CSSCodeEditor
-                      mode={editingPreset.mode}
-                      settings={editingPreset.settings}
-                      onSettingsChange={(newSettings) =>
-                        setEditingPreset({ ...editingPreset, settings: newSettings })
-                      }
+                      presetId={editingPresetId!}
+                      mode={editMode}
+                      effectiveSettings={effectiveSettings}
+                      baseSettings={editingPreset.baseSettings}
+                      onOverridesChange={(overrides) => {
+                        if (editingPresetId) applyBulkOverrides(editingPresetId, overrides);
+                      }}
                     />
                   </TabsContent>
                 </Tabs>
@@ -914,7 +809,7 @@ export default function Admin() {
           <DialogFooter className="gap-2">
             <Button
               variant="outline"
-              onClick={() => setEditingPreset(null)}
+              onClick={handleCancelEdit}
               className="border-border text-muted-foreground"
             >
               Mégse
@@ -932,54 +827,39 @@ export default function Admin() {
           <DialogHeader>
             <DialogTitle className="text-foreground">Törlés megerősítése</DialogTitle>
           </DialogHeader>
-          {/* [UX] Show the preset name so the user knows exactly what they're deleting */}
           <p className="text-sm text-muted-foreground">
-            Biztosan törölni szeretnéd a{' '}
-            <strong className="text-foreground">„{deleteTargetName}"</strong> presetet?
-            Ez a művelet nem vonható vissza.
+            Biztosan törlöd a(z) <strong className="text-foreground">{deleteTargetName}</strong> presetet?
           </p>
           <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setDeleteConfirm(null)}
-              className="border-border text-muted-foreground"
-            >
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)} className="border-border text-muted-foreground">
               Mégse
             </Button>
-            <Button
-              variant="destructive"
-              onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
-            >
-              Törlés
+            <Button variant="destructive" onClick={() => deleteConfirm && handleDelete(deleteConfirm)}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Törlés
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ── Reset confirmation ────────────────────────────────── */}
-      {/* [UX] New dialog — prevents accidental bulk reset */}
+      {/* ── Reset all confirmation ────────────────────────────── */}
       <Dialog open={resetConfirm} onOpenChange={setResetConfirm}>
         <DialogContent className="max-w-sm bg-card border-border">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-foreground">
-              <AlertTriangle className="h-4 w-4 text-warning" />
+              <AlertTriangle className="h-5 w-5 text-destructive" />
               Alapértelmezés visszaállítása
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Ez a művelet az összes jelenlegi presetet felülírja az alapértelmezett értékekkel.
-            Az egyéni változtatások elvesznek.
+            Ez <strong className="text-foreground">minden</strong> presetet visszaállít az eredeti
+            értékekre. Az egyéni módosítások elvesznek.
           </p>
           <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setResetConfirm(false)}
-              className="border-border text-muted-foreground"
-            >
+            <Button variant="outline" onClick={() => setResetConfirm(false)} className="border-border text-muted-foreground">
               Mégse
             </Button>
             <Button variant="destructive" onClick={handleConfirmedReset}>
-              Visszaállítás
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Visszaállítás
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -989,91 +869,69 @@ export default function Admin() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SECTION 4: CSSCodeEditor
+// SECTION 4: CSS Code Editor (Selective Merge)
 // ─────────────────────────────────────────────────────────────────
 
-/**
- * [P1] CRITICAL FIX: The original component had direct state mutations inside
- * the render function body:
- *
- *   if (mode !== prevMode) {
- *     setCssText(...)   // ← state setter called during render!
- *     setPrevMode(...)
- *     ...
- *   }
- *
- * This is a React anti-pattern that causes:
- *   • Double renders under React Strict Mode
- *   • Unpredictable behaviour in Concurrent Mode (React 18+)
- *   • Potential infinite re-render cycles
- *
- * FIX: The prevMode pattern is eliminated entirely. We use a `useRef` to track
- * whether the current `cssText` was user-modified, and a `useEffect` that runs
- * whenever `mode` changes to safely reset all editor state in one batched update.
- */
 function CSSCodeEditor({
+  presetId,
   mode,
-  settings,
-  onSettingsChange,
+  effectiveSettings,
+  baseSettings,
+  onOverridesChange,
 }: {
+  presetId: string;
   mode: EffectMode;
-  settings: Preset['settings'];
-  onSettingsChange: (s: Preset['settings']) => void;
+  effectiveSettings: PresetSettings;
+  baseSettings: PresetSettings;
+  onOverridesChange: (overrides: Partial<PresetSettings>) => void;
 }) {
   const generatedCSS = useMemo(
-    () => generateCSSForPreset(mode, settings),
-    // Only regenerate when mode changes (not after every slider tick to avoid
-    // overwriting the editor while the user is typing CSS)
+    () => generateCSSForPreset(mode, effectiveSettings),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode],
+    [mode, effectiveSettings],
   );
 
-  const [cssText,       setCssText]       = useState(generatedCSS);
-  const [parseStatus,   setParseStatus]   = useState<'idle' | 'success' | 'error' | 'modified'>('idle');
-  const [parseMessage,  setParseMessage]  = useState('');
+  const [cssText, setCssText] = useState(generatedCSS);
+  const [parseStatus, setParseStatus] = useState<'idle' | 'success' | 'error' | 'modified'>('idle');
+  const [parseMessage, setParseMessage] = useState('');
   const [lastAppliedCSS, setLastAppliedCSS] = useState(generatedCSS);
-
-  /**
-   * [P1] useRef tracks whether the user has made unsaved edits.
-   * We never call setState in the render body.
-   */
   const isUserEditRef = useRef(false);
 
-  /**
-   * [P1] useEffect responds to mode changes and resets editor state safely.
-   * This replaces the broken render-phase if-block entirely.
-   */
   useEffect(() => {
-    const fresh = generateCSSForPreset(mode, settings);
-    setCssText(fresh);
-    setLastAppliedCSS(fresh);
-    setParseStatus('idle');
-    setParseMessage('');
-    isUserEditRef.current = false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+    if (!isUserEditRef.current) {
+      const fresh = generateCSSForPreset(mode, effectiveSettings);
+      setCssText(fresh);
+      setLastAppliedCSS(fresh);
+      setParseStatus('idle');
+      setParseMessage('');
+    }
+  }, [mode, effectiveSettings]);
 
   const isModified = cssText !== lastAppliedCSS;
 
+  /**
+   * KEY CHANGE: Apply CSS uses parseCSSToOverrides for SELECTIVE merge.
+   * Only properties found in the CSS will override base values.
+   */
   const handleApplyCSS = () => {
-    const parsed = robustParseCSSToSettings(mode, cssText, settings);
-    if (parsed) {
-      onSettingsChange(parsed);
+    const overrides = parseCSSToOverrides(mode, cssText);
+    if (overrides) {
+      onOverridesChange(overrides);
       setParseStatus('success');
-      setParseMessage('✓ CSS sikeresen alkalmazva! Az értékek frissültek.');
+      setParseMessage('✓ CSS sikeresen alkalmazva! Csak a módosított property-k frissültek — az alap értékek megmaradtak.');
       setLastAppliedCSS(cssText);
       isUserEditRef.current = false;
-      toast.success('CSS alkalmazva');
+      toast.success('CSS alkalmazva (szelektív merge)');
     } else {
       setParseStatus('error');
       setParseMessage(
-        '✗ Nem sikerült értelmezni a CSS-t. Ellenőrizd, hogy érvényes CSS property-k vannak (pl. background, backdrop-filter, border-radius, box-shadow, border).',
+        '✗ Nem sikerült értelmezni a CSS-t. Ellenőrizd, hogy érvényes CSS property-k vannak.',
       );
     }
   };
 
   const handleRegenerate = () => {
-    const fresh = generateCSSForPreset(mode, settings);
+    const fresh = generateCSSForPreset(mode, effectiveSettings);
     setCssText(fresh);
     setLastAppliedCSS(fresh);
     setParseStatus('idle');
@@ -1081,17 +939,12 @@ function CSSCodeEditor({
     isUserEditRef.current = false;
   };
 
-  /**
-   * [HARDENING] Clipboard copy is wrapped in try/catch.
-   * navigator.clipboard can throw on non-HTTPS origins or when the
-   * Permissions API denies access.
-   */
   const handleCopyCSS = async () => {
     try {
       await navigator.clipboard.writeText(cssText);
       toast.success('CSS másolva');
     } catch {
-      toast.error('Másolás sikertelen — ellenőrizd a böngésző engedélyeket');
+      toast.error('Másolás sikertelen');
     }
   };
 
@@ -1103,46 +956,37 @@ function CSSCodeEditor({
       setParseMessage('');
     } else {
       setParseStatus('modified');
-      setParseMessage('Módosított — kattints az „Alkalmaz" gombra a beállítások frissítéséhez.');
+      setParseMessage('Módosított — kattints az „Alkalmaz" gombra. Csak a CSS-ben definiált property-k íródnak felül.');
     }
   };
 
-  /**
-   * [P2 + PERF] Live preview: only re-parse when cssText changes.
-   * Skip expensive parsing if the text hasn't actually changed.
-   */
   const livePreviewStyle = useMemo<CSSProperties>(() => {
     try {
-      const parsed = robustParseCSSToSettings(mode, cssText, settings);
-      if (!parsed) return {};
+      const overrides = parseCSSToOverrides(mode, cssText);
+      if (!overrides) return {};
 
+      const merged = mergeSettings(baseSettings, overrides);
       let gen: { properties: Record<string, string | undefined>; css: string };
-      if (mode === 'liquid-glass')       gen = generateLiquidGlassCSS(parsed as LiquidGlassSettings);
-      else if (mode === 'glassmorphism') gen = generateGlassmorphismCSS(parsed as GlassmorphismSettings);
-      else if (mode === 'glow')          gen = generateGlowCSS(parsed as GlowSettings);
-      else                               gen = generateNeumorphismCSS(parsed as NeumorphismSettings);
+      if (mode === 'liquid-glass') gen = generateLiquidGlassCSS(merged as LiquidGlassSettings);
+      else if (mode === 'glassmorphism') gen = generateGlassmorphismCSS(merged as GlassmorphismSettings);
+      else if (mode === 'glow') gen = generateGlowCSS(merged as GlowSettings);
+      else gen = generateNeumorphismCSS(merged as NeumorphismSettings);
 
       const style: CSSProperties = {};
       for (const [key, val] of Object.entries(gen.properties)) {
         if (!val) continue;
         const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-        // [HARDENING] Type-cast is intentional here: we're dynamically building
-        // inline styles from known CSS property names.
         (style as Record<string, string>)[camel] = val;
       }
-
-      // Neumorphism may use a gradient background that needs explicit override
       if (mode === 'neumorphism') {
         const bgMatch = gen.css.match(/background:\s*(linear-gradient[^;]+);/);
         if (bgMatch) style.background = bgMatch[1];
       }
-
       return style;
     } catch {
       return {};
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cssText, mode]);
+  }, [cssText, mode, baseSettings]);
 
   return (
     <div className="space-y-3">
@@ -1163,18 +1007,10 @@ function CSSCodeEditor({
       <div className="flex items-center justify-between">
         <Label className="text-xs text-muted-foreground font-medium">CSS kód</Label>
         <div className="flex gap-1">
-          <Button
-            variant="ghost" size="sm"
-            onClick={handleRegenerate}
-            className="h-7 text-[10px] text-muted-foreground"
-          >
+          <Button variant="ghost" size="sm" onClick={handleRegenerate} className="h-7 text-[10px] text-muted-foreground">
             <RotateCcw className="mr-1 h-3 w-3" /> Újragenerálás
           </Button>
-          <Button
-            variant="ghost" size="sm"
-            onClick={handleCopyCSS}
-            className="h-7 text-[10px] text-muted-foreground"
-          >
+          <Button variant="ghost" size="sm" onClick={handleCopyCSS} className="h-7 text-[10px] text-muted-foreground">
             <Copy className="mr-1 h-3 w-3" /> Másolás
           </Button>
         </div>
@@ -1191,10 +1027,7 @@ function CSSCodeEditor({
         />
         {isModified && (
           <div className="absolute top-2 right-2">
-            <Badge
-              variant="outline"
-              className="text-[9px] px-1.5 py-0 bg-accent text-accent-foreground border-accent"
-            >
+            <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-accent text-accent-foreground border-accent">
               módosított
             </Badge>
           </div>
@@ -1205,9 +1038,9 @@ function CSSCodeEditor({
       {parseMessage && (
         <p
           className={`text-[11px] font-medium ${
-            parseStatus === 'success'  ? 'text-green-500'    :
-            parseStatus === 'error'    ? 'text-destructive'  :
-                                         'text-muted-foreground'
+            parseStatus === 'success' ? 'text-green-500' :
+            parseStatus === 'error' ? 'text-destructive' :
+            'text-muted-foreground'
           }`}
           role={parseStatus === 'error' ? 'alert' : undefined}
         >
@@ -1223,14 +1056,13 @@ function CSSCodeEditor({
           disabled={!isModified}
           className="bg-primary text-primary-foreground text-xs flex-1"
         >
-          <Code className="mr-1.5 h-3.5 w-3.5" /> Alkalmaz
+          <Code className="mr-1.5 h-3.5 w-3.5" /> Alkalmaz (szelektív merge)
         </Button>
       </div>
 
       <p className="text-[10px] text-muted-foreground leading-relaxed">
-        Módosítsd a CSS property-ket (background, backdrop-filter, border-radius, border,
-        box-shadow), majd kattints az „Alkalmaz" gombra. A rendszer automatikusan visszafejti a
-        slider értékeket.
+        💡 <strong>Szelektív merge</strong>: Csak a CSS-ben definiált property-k íródnak felül.
+        A többi alap preset érték megmarad. Használd a „Reset" gombot a visszaállításhoz.
       </p>
     </div>
   );
@@ -1243,18 +1075,14 @@ function CSSCodeEditor({
 function SliderField({
   label, value, onChange, min = 0, max = 100, step = 1, unit = '',
 }: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
+  label: string; value: number; onChange: (v: number) => void;
   min?: number; max?: number; step?: number; unit?: string;
 }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
         <Label className="text-[11px] text-muted-foreground">{label}</Label>
-        <span className="text-[11px] font-mono text-muted-foreground">
-          {value}{unit}
-        </span>
+        <span className="text-[11px] font-mono text-muted-foreground">{value}{unit}</span>
       </div>
       <Slider value={[value]} onValueChange={([v]) => onChange(v)} min={min} max={max} step={step} />
     </div>
@@ -1271,14 +1099,11 @@ function ColorField({
       <Label className="text-[11px] text-muted-foreground">{label}</Label>
       <div className="flex items-center gap-2">
         <input
-          type="color"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          type="color" value={value} onChange={(e) => onChange(e.target.value)}
           className="h-6 w-6 cursor-pointer rounded border border-border bg-transparent"
         />
         <Input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          value={value} onChange={(e) => onChange(e.target.value)}
           className="h-7 w-20 font-mono text-xs bg-secondary border-border"
         />
       </div>
@@ -1289,9 +1114,7 @@ function ColorField({
 function PresetSettingsEditor({
   mode, settings, updateSetting,
 }: {
-  mode: EffectMode;
-  settings: Preset['settings'];
-  updateSetting: (key: string, value: number | string) => void;
+  mode: EffectMode; settings: PresetSettings; updateSetting: (key: string, value: number | string) => void;
 }) {
   if (mode === 'liquid-glass') {
     const s = settings as LiquidGlassSettings;
@@ -1360,7 +1183,7 @@ function PresetSettingsEditor({
     );
   }
 
-  // ── Neumorphism ────────────────────────────────────────────────
+  // Neumorphism
   const s = settings as NeumorphismSettings;
   const shapes = ['flat', 'concave', 'convex', 'pressed'] as const;
   return (
@@ -1371,7 +1194,6 @@ function PresetSettingsEditor({
       <SliderField label="Intensity"     value={s.intensity}    onChange={(v) => updateSetting('intensity', v)}    min={1} max={50} unit="%" />
       <SliderField label="Blur"          value={s.blur}         onChange={(v) => updateSetting('blur', v)}         min={1} max={40} unit="px" />
 
-      {/* [HARDENING] aria-pressed for proper button semantics */}
       <div className="space-y-1.5">
         <Label className="text-[11px] text-muted-foreground">Shape</Label>
         <div className="grid grid-cols-4 gap-1" role="group" aria-label="Neumorphism shape">

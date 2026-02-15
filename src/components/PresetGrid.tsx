@@ -1,4 +1,4 @@
-import { usePresetManager } from '@/hooks/use-preset-manager';
+import { useEnhancedPresetManager, mergeSettings } from '@/hooks/use-enhanced-preset-manager';
 import type { Preset } from '@/types/css-generator';
 
 interface PresetGridProps {
@@ -6,14 +6,26 @@ interface PresetGridProps {
 }
 
 export function PresetGrid({ onSelect }: PresetGridProps) {
-  const { presets } = usePresetManager();
+  const { presets } = useEnhancedPresetManager();
+
+  const handleSelect = (preset: typeof presets[number]) => {
+    // Convert EnhancedPreset → Preset for compatibility with useCssGenerator.applyPreset
+    const effective = mergeSettings(preset.baseSettings, preset.userOverrides);
+    onSelect({
+      id: preset.id,
+      name: preset.name,
+      mode: preset.mode,
+      color: preset.color,
+      settings: effective,
+    });
+  };
 
   return (
     <div className="grid grid-cols-4 md:grid-cols-3 gap-1.5 md:gap-2">
       {presets.map(preset => (
         <button
           key={preset.id}
-          onClick={() => onSelect(preset)}
+          onClick={() => handleSelect(preset)}
           className="group flex flex-col items-center gap-1 md:gap-1.5 rounded-lg bg-secondary/50 p-2 md:p-2.5 transition-all hover:bg-secondary hover:scale-105 min-h-[44px]"
         >
           <div
