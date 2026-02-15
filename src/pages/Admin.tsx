@@ -53,6 +53,7 @@ import {
   EnhancedCSSEditor,
   PassthroughPropertiesPanel,
 } from '@/components/PassthroughCSSComponents';
+import { ImportCSSModal } from '@/components/ImportCSSModal';
 import type {
   EnhancedPreset,
   EffectMode,
@@ -75,6 +76,7 @@ import {
   AlertTriangle,
   Save,
   Undo2,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -421,6 +423,7 @@ export default function Admin() {
 
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [isImportCSSOpen, setIsImportCSSOpen] = useState(false);
 
   const editingPreset = presets.find((p) => p.id === editingPresetId) ?? null;
 
@@ -836,6 +839,7 @@ export default function Admin() {
                           });
                         }
                       }}
+                      onImportClick={() => setIsImportCSSOpen(true)}
                     />
                   </TabsContent>
                 </Tabs>
@@ -901,6 +905,29 @@ export default function Admin() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Import CSS Modal ──────────────────────────────────── */}
+      {editingPreset && (
+        <ImportCSSModal
+          isOpen={isImportCSSOpen}
+          onClose={() => setIsImportCSSOpen(false)}
+          mode={editMode}
+          onImport={(effectOverrides, passthroughCSS) => {
+            if (editingPresetId) {
+              // Apply effect overrides
+              applyBulkOverrides(editingPresetId, effectOverrides);
+
+              // Apply passthrough properties
+              updatePreset(editingPresetId, {
+                passthroughCSS: {
+                  ...(editingPreset?.passthroughCSS || {}),
+                  ...passthroughCSS,
+                },
+              });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -919,6 +946,7 @@ function CSSCodeEditor({
   onRemovePassthrough,
   onClearAllPassthrough,
   onPassthroughChange,
+  onImportClick,
 }: {
   presetId: string;
   mode: EffectMode;
@@ -929,6 +957,7 @@ function CSSCodeEditor({
   onRemovePassthrough?: (key: string) => void;
   onClearAllPassthrough?: () => void;
   onPassthroughChange?: (properties: Record<string, string>) => void;
+  onImportClick?: () => void;
 }) {
   const generatedCSS = useMemo(
     () => generateCSSForPreset(mode, effectiveSettings),
@@ -1069,6 +1098,18 @@ function CSSCodeEditor({
         onApply={handleApplyCSS}
         diagnostics={diagnostics}
       />
+
+      {/* Import CSS Button */}
+      {onImportClick && (
+        <Button
+          variant="outline"
+          className="w-full border-border text-muted-foreground hover:text-foreground"
+          onClick={onImportClick}
+        >
+          <Upload className="mr-2 h-4 w-4" />
+          CSS importálása (figyelmen kívül hagyott property-k)
+        </Button>
+      )}
 
       {/* Passthrough Properties Panel */}
       {preset?.passthroughCSS && Object.keys(preset.passthroughCSS).length > 0 && (
