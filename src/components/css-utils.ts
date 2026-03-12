@@ -59,6 +59,25 @@ export interface AccessibilityInfo {
   recommendation: string;
 }
 
+export type CSSValidityStatus = 'valid' | 'partial' | 'invalid';
+
+export interface CSSValidityInfo {
+  status: CSSValidityStatus;
+  parsedCount: number;
+  failedCount: number;
+  message: string;
+}
+
+export interface AutoFixSuggestion {
+  label: string;
+  property: string;
+  currentValue: string;
+  suggestedValue: string;
+  settingsKey?: string;
+  settingsValue?: number | string;
+  severity: Severity;
+}
+
 export interface ParseResult {
   /** Extracted & validated settings, or null if parsing failed entirely */
   settings: Preset['settings'] | null;
@@ -70,6 +89,10 @@ export interface ParseResult {
   accessibility?: AccessibilityInfo;
   /** Names of numeric fields that were clamped to their valid range */
   clampedFields: string[];
+  /** CSS validity status */
+  validity: CSSValidityInfo;
+  /** Auto-fix suggestions for diagnostics */
+  autoFixes: AutoFixSuggestion[];
 }
 
 /** Raw declaration extracted from the PostCSS AST. */
