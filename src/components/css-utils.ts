@@ -1138,6 +1138,93 @@ function calculateAccessibility(
 // SECTION 13: Main Entry Point
 // ══════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════
+// SECTION 13a: Auto-fix suggestion generator
+// ══════════════════════════════════════════════════════════════════
+
+function generateAutoFixes(
+  mode: EffectMode,
+  settings: Preset['settings'],
+  diagnostics: Diagnostic[],
+  clampedFields: string[],
+  accessibility?: AccessibilityInfo,
+): AutoFixSuggestion[] {
+  const fixes: AutoFixSuggestion[] = [];
+  const ranges = SETTING_RANGES[mode] ?? {};
+
+  // Fixes for clamped fields
+  for (const key of clampedFields) {
+    const range = ranges[key];
+    if (!range) continue;
+    const val = (settings as Record<string, unknown>)[key];
+    fixes.push({
+      label: `'${key}' értéke a megengedett tartományra korrigálva (${range[0]}–${range[1]})`,
+      property: key,
+      currentValue: String(val),
+      suggestedValue: String(val), // already clamped
+      settingsKey: key,
+      settingsValue: val as number,
+      severity: 'info',
+    });
+  }
+
+  // Blur performance fix
+  for (const d of diagnostics) {
+    if (d.property === 'blur' && d.severity === 'warning' && d.message.includes('GPU-intensive')) {
+      fixes.push({
+        label: 'Csökkentsd a blur értéket 30px-re a jobb teljesítményért',
+        property: 'blur',
+        currentValue: String((settings as Record<string, unknown>).blur ?? ''),
+        suggestedValue: '30',
+        settingsKey: 'blur',
+        settingsValue: 30,
+        severity: 'warning',
+      });
+    }
+    if (d.property === 'glowBlur' && d.severity === 'warning') {
+      fixes.push({
+        label: 'Csökkentsd a glowBlur értéket 100px-re',
+        property: 'glowBlur',
+        currentValue: String((settings as Record<string, unknown>).glowBlur ?? ''),
+        suggestedValue: '100',
+        settingsKey: 'glowBlur',
+        settingsValue: 100,
+        severity: 'warning',
+      });
+    }
+  }
+
+  // WCAG fix
+  if (accessibility && !accessibility.passesAA) {
+    const s = settings as Record<string, unknown>;
+    if ('bgAlpha' in s && typeof s.bgAlpha === 'number') {
+      const suggestedAlpha = Math.min(100, s.bgAlpha + 25);
+      fixes.push({
+        label: `Növeld a bgAlpha értéket ${suggestedAlpha}%-ra a jobb kontraszt érdekében`,
+        property: 'bgAlpha',
+        currentValue: String(s.bgAlpha),
+        suggestedValue: String(suggestedAlpha),
+        settingsKey: 'bgAlpha',
+        settingsValue: suggestedAlpha,
+        severity: 'warning',
+      });
+    }
+    fixes.push({
+      label: `Használd az ajánlott szövegszínt: ${accessibility.recommendedTextColor}`,
+      property: 'color',
+      currentValue: '',
+      suggestedValue: accessibility.recommendedTextColor,
+      severity: 'info',
+    });
+  }
+
+  return fixes;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SECTION 14: Main Entry Point
+// ══════════════════════════════════════════════════════════════════
+
 export function parseAndValidateCSS(
   mode: EffectMode,
   css: string,
@@ -1146,12 +1233,25 @@ export function parseAndValidateCSS(
   const diagnostics: Diagnostic[] = [];
   const ghostProperties: GhostProperty[] = [];
   const clampedFields: string[] = [];
+  const autoFixes: AutoFixSuggestion[] = [];
 
   const { declarations, syntaxError } = walkCSS(css);
   if (syntaxError) diagnostics.push(syntaxError);
 
+  // Determine validity
+  const totalAttempted = declarations.length + (syntaxError ? 1 : 0);
+  const failedCount = syntaxError ? 1 : 0;
+
   if (declarations.length === 0 && syntaxError) {
-    return { settings: null, diagnostics, ghostProperties, clampedFields };
+    return {
+      settings: null, diagnostics, ghostProperties, clampedFields, autoFixes,
+      validity: {
+        status: 'invalid',
+        parsedCount: 0,
+        failedCount: 1,
+        message: 'A CSS nem értelmezhető — ellenőrizd a szintaxist.',
+      },
+    };
   }
 
   const propMap = new Map<string, CSSDeclaration>();
@@ -1165,7 +1265,7 @@ export function parseAndValidateCSS(
         property: decl.property,
         value:    decl.value,
         line:     decl.line,
-        reason:   `'${decl.property}' is not used by ${mode} — it will be ignored.`,
+        reason:   `'${decl.property}' nem használatos a ${mode} módban — figyelmen kívül hagyva.`,
       });
     }
   }
@@ -1187,5 +1287,34 @@ export function parseAndValidateCSS(
   runSemanticRules(mode, settings, diagnostics);
   const accessibility = calculateAccessibility(mode, settings);
 
-  return { settings, diagnostics, ghostProperties, clampedFields, accessibility };
+  // Generate auto-fixes
+  const fixes = generateAutoFixes(mode, settings, diagnostics, clampedFields, accessibility);
+  autoFixes.push(...fixes);
+
+  // Compute validity
+  const validityStatus: CSSValidityStatus =
+    syntaxError && declarations.length > 0 ? 'partial'
+    : syntaxError ? 'invalid'
+    : 'valid';
+
+  const validityMessages: Record<CSSValidityStatus, string> = {
+    valid: `${declarations.length} deklaráció sikeresen feldolgozva.`,
+    partial: `${declarations.length} deklaráció feldolgozva, szintaktikai hiba is található.`,
+    invalid: 'A CSS nem értelmezhető.',
+  };
+
+  return {
+    settings,
+    diagnostics,
+    ghostProperties,
+    clampedFields,
+    accessibility,
+    autoFixes,
+    validity: {
+      status: validityStatus,
+      parsedCount: declarations.length,
+      failedCount,
+      message: validityMessages[validityStatus],
+    },
+  };
 }
