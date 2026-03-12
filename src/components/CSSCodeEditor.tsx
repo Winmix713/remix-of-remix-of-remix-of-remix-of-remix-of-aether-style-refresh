@@ -8,7 +8,8 @@
  * │  DiagnosticsPanel Categorised error/warning/info messages      │
  * │  GhostPanel       Properties that the current mode ignores     │
  * │  AccessibilityCard WCAG contrast ratio + recommended text color│
- * │  CSSCodeEditor    Main orchestrator; wired to parseAndValidate  │
+ * │  AutoFixPanel     Actionable fix suggestions                   │
+ * │  CSSCodeEditor    Main orchestrator with undo/redo             │
  * └─────────────────────────────────────────────────────────────────┘
  */
 
@@ -32,6 +33,7 @@ import {
 import {
   RotateCcw, Copy, Code, AlertTriangle, Info, CheckCircle2,
   Eye, EyeOff, ChevronDown, ChevronUp, ShieldCheck, ShieldX,
+  Undo2, Redo2, Wrench, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -41,8 +43,13 @@ import {
   type Diagnostic,
   type GhostProperty,
   type AccessibilityInfo,
+  type AutoFixSuggestion,
+  type CSSValidityStatus,
 } from './css-utils';
+import { PreviewStatusBanner } from './PreviewStatusBanner';
 import { normalizeStyleProperties } from '@/hooks/use-css-normalization';
+import { useCSSHistory } from '@/hooks/use-css-history';
+import { diffCSS, diffSummary } from '@/utils/css-diff';
 import {
   generateLiquidGlassCSS,
   generateGlassmorphismCSS,
@@ -84,7 +91,6 @@ function settingsToPreviewStyle(
     else                               gen = generateNeumorphismCSS(settings as NeumorphismSettings);
 
     const allProps: Record<string, string> = {};
-
     for (const [key, val] of Object.entries(gen.properties)) {
       if (!val) continue;
       const camel = key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -93,12 +99,9 @@ function settingsToPreviewStyle(
 
     if (mode === 'neumorphism') {
       const bgM = gen.css.match(/background:\s*(linear-gradient[^;]+);/);
-      if (bgM) {
-        allProps.background = bgM[1];
-      }
+      if (bgM) allProps.background = bgM[1];
     }
 
-    // Normalize to avoid shorthand/non-shorthand conflicts
     return normalizeStyleProperties(allProps);
   } catch {
     return {};
@@ -286,6 +289,65 @@ function DiagnosticsPanel({ diagnostics }: DiagnosticsPanelProps) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// Sub-component: AutoFixPanel
+// ══════════════════════════════════════════════════════════════════
+
+interface AutoFixPanelProps {
+  fixes: AutoFixSuggestion[];
+  onApplyFix: (fix: AutoFixSuggestion) => void;
+}
+
+function AutoFixPanel({ fixes, onApplyFix }: AutoFixPanelProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  if (!fixes.length) return null;
+
+  return (
+    <div className="rounded-md border border-border bg-card/50 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="w-full flex items-center justify-between px-2.5 py-1.5 text-left hover:bg-secondary/40 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Wrench className="h-3 w-3 text-muted-foreground" />
+          <span className="text-[11px] font-medium text-foreground">Javasolt javítások</span>
+          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 text-muted-foreground">
+            {fixes.length}
+          </Badge>
+        </div>
+        {collapsed ? <ChevronDown className="h-3 w-3 text-muted-foreground" /> : <ChevronUp className="h-3 w-3 text-muted-foreground" />}
+      </button>
+      {!collapsed && (
+        <ul className="divide-y divide-border/50">
+          {fixes.map((fix, i) => (
+            <li key={i} className="flex items-start gap-2 px-2.5 py-1.5">
+              <SeverityIcon severity={fix.severity} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] leading-relaxed text-foreground">{fix.label}</p>
+                {fix.currentValue && (
+                  <p className="text-[9px] text-muted-foreground/60 mt-0.5 font-mono">
+                    {fix.property}: {fix.currentValue} → {fix.suggestedValue}
+                  </p>
+                )}
+              </div>
+              {fix.settingsKey && (
+                <button
+                  type="button"
+                  onClick={() => onApplyFix(fix)}
+                  className="shrink-0 flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  <Zap className="h-2.5 w-2.5" /> Javítás
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════
 // Sub-component: GhostPanel
 // ══════════════════════════════════════════════════════════════════
 
@@ -414,18 +476,18 @@ function AccessibilityCard({ info }: { info: AccessibilityInfo }) {
           style={{
             width: `${barWidth}%`,
             background: info.passesAAA
-              ? 'linear-gradient(90deg, #22c55e, #16a34a)'
+              ? 'linear-gradient(90deg, hsl(142, 71%, 45%), hsl(142, 76%, 36%))'
               : info.passesAA
-              ? 'linear-gradient(90deg, #60a5fa, #3b82f6)'
-              : 'linear-gradient(90deg, #f87171, #ef4444)',
+              ? 'linear-gradient(90deg, hsl(217, 91%, 60%), hsl(217, 91%, 50%))'
+              : 'linear-gradient(90deg, hsl(0, 84%, 60%), hsl(0, 84%, 50%))',
           }}
         />
         <div
-          className="absolute top-0 bottom-0 w-px bg-white/30"
+          className="absolute top-0 bottom-0 w-px bg-foreground/20"
           style={{ left: `${aaThresholdPct}%` }}
         />
         <div
-          className="absolute top-0 bottom-0 w-px bg-white/20"
+          className="absolute top-0 bottom-0 w-px bg-foreground/15"
           style={{ left: `${aaaThresholdPct}%` }}
         />
       </div>
@@ -465,8 +527,6 @@ export interface CSSCodeEditorProps {
   onSettingsChange: (s: Preset['settings']) => void;
 }
 
-type EditorStatus = 'idle' | 'modified' | 'applied' | 'error';
-
 export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEditorProps) {
   const generatedCSS = useMemo(
     () => generateCSSForPreset(mode, settings),
@@ -474,30 +534,26 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
     [mode],
   );
 
-  const [cssText,        setCssText]        = useState(generatedCSS);
-  const [lastAppliedCSS, setLastAppliedCSS] = useState(generatedCSS);
-  const [status,         setStatus]         = useState<EditorStatus>('idle');
-  const [showA11y,       setShowA11y]       = useState(false);
+  const [historyState, historyActions] = useCSSHistory(generatedCSS);
+  const [showA11y, setShowA11y] = useState(false);
+  const [lastStableCSS, setLastStableCSS] = useState(generatedCSS);
 
   const prevModeRef = useRef(mode);
 
   useEffect(() => {
     if (mode !== prevModeRef.current) {
       const fresh = generateCSSForPreset(mode, settings);
-      setCssText(fresh);
-      setLastAppliedCSS(fresh);
-      setStatus('idle');
+      historyActions.resetTo(fresh);
+      setLastStableCSS(fresh);
       prevModeRef.current = mode;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  const isModified = cssText !== lastAppliedCSS;
-
   const parseResult = useMemo(
-    () => parseAndValidateCSS(mode, cssText, settings),
+    () => parseAndValidateCSS(mode, historyState.draft, settings),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cssText, mode],
+    [historyState.draft, mode],
   );
 
   const livePreviewStyle = useMemo<CSSProperties>(() => {
@@ -516,57 +572,107 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
     return map;
   }, [parseResult.diagnostics]);
 
-  const handleCSSChange = (val: string) => {
-    setCssText(val);
-    setStatus(val === lastAppliedCSS ? 'idle' : 'modified');
-  };
+  // Diff between committed and draft
+  const changeDiffs = useMemo(
+    () => diffCSS(historyState.committed, historyState.draft),
+    [historyState.committed, historyState.draft],
+  );
+  const changeSummary = useMemo(() => diffSummary(changeDiffs), [changeDiffs]);
 
-  const handleApply = () => {
+  const handleCSSChange = useCallback((val: string) => {
+    historyActions.setDraft(val);
+  }, [historyActions]);
+
+  const handleApply = useCallback(() => {
     if (!parseResult.settings) {
-      setStatus('error');
       toast.error('A CSS nem értelmezhető — ellenőrizd a hibákat');
       return;
     }
     onSettingsChange(parseResult.settings);
-    setLastAppliedCSS(cssText);
-    setStatus('applied');
+    historyActions.commit(historyState.draft);
+    setLastStableCSS(historyState.draft);
     const clamped = parseResult.clampedFields;
     if (clamped.length) {
       toast.success(`CSS alkalmazva (${clamped.length} érték korrigálva: ${clamped.join(', ')})`);
     } else {
       toast.success('CSS sikeresen alkalmazva');
     }
-  };
+  }, [parseResult, onSettingsChange, historyActions, historyState.draft]);
 
-  const handleRegenerate = () => {
+  const handleRegenerate = useCallback(() => {
     const fresh = generateCSSForPreset(mode, settings);
-    setCssText(fresh);
-    setLastAppliedCSS(fresh);
-    setStatus('idle');
-  };
+    historyActions.resetTo(fresh);
+    setLastStableCSS(fresh);
+  }, [mode, settings, historyActions]);
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(cssText);
+      await navigator.clipboard.writeText(historyState.draft);
       toast.success('CSS másolva');
     } catch {
-      toast.error('Másolás sikertelen — ellenőrizd a böngésző engedélyeket');
+      toast.error('Másolás sikertelen');
     }
-  };
+  }, [historyState.draft]);
+
+  const handleUndo = useCallback(() => {
+    const result = historyActions.undo();
+    if (result) toast('Visszavonva', { duration: 1500 });
+  }, [historyActions]);
+
+  const handleRedo = useCallback(() => {
+    const result = historyActions.redo();
+    if (result) toast('Újra alkalmazva', { duration: 1500 });
+  }, [historyActions]);
+
+  const handleRevertDraft = useCallback(() => {
+    historyActions.revertDraft();
+    toast('Draft visszaállítva az utolsó mentett állapotra', { duration: 2000 });
+  }, [historyActions]);
+
+  const handleApplyFix = useCallback((fix: AutoFixSuggestion) => {
+    if (!fix.settingsKey || !parseResult.settings) return;
+    const updated = { ...parseResult.settings, [fix.settingsKey]: fix.settingsValue } as Preset['settings'];
+    onSettingsChange(updated);
+    // Regenerate CSS from fixed settings
+    const freshCSS = generateCSSForPreset(mode, updated);
+    historyActions.commit(freshCSS);
+    setLastStableCSS(freshCSS);
+    toast.success(`Javítás alkalmazva: ${fix.property}`);
+  }, [parseResult.settings, onSettingsChange, mode, historyActions]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          e.preventDefault();
+          handleUndo();
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleUndo, handleRedo]);
 
   const errorCount   = parseResult.diagnostics.filter((d) => d.severity === 'error').length;
   const warningCount = parseResult.diagnostics.filter((d) => d.severity === 'warning').length;
   const hasIssues    = errorCount + warningCount > 0;
 
-  const statusConfig = {
-    idle:     { text: '',                                                color: '' },
-    modified: { text: 'Módosítva — kattints az „Alkalmaz" gombra',       color: 'text-muted-foreground' },
-    applied:  { text: '✓ Beállítások frissítve',                         color: 'text-green-500' },
-    error:    { text: '✗ Nem sikerült értelmezni — javítsd a hibákat',   color: 'text-destructive' },
-  } as const;
+  const showLastStable = parseResult.validity.status === 'invalid' || parseResult.validity.status === 'partial';
 
   return (
     <div className="space-y-3">
+      {/* Validity status banner */}
+      <PreviewStatusBanner
+        validity={parseResult.validity.status}
+        message={parseResult.validity.message}
+        accessibility={parseResult.accessibility}
+        showLastStable={showLastStable}
+      />
+
       {/* Live mini preview */}
       <div className="relative rounded-lg border border-border bg-gradient-to-br from-muted/50 to-muted p-4 flex items-center justify-center min-h-[80px]">
         <div
@@ -592,6 +698,19 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
             {showA11y ? <ChevronUp className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
           </button>
         )}
+        {/* Change diff summary badge */}
+        {changeDiffs.length > 0 && (
+          <div className="absolute bottom-1.5 left-2 flex items-center gap-1">
+            {changeSummary.hasA11yChanges && (
+              <Badge className="text-[8px] px-1 py-0 h-3.5 bg-amber-500/20 text-amber-500 border-amber-500/30">
+                A11Y
+              </Badge>
+            )}
+            <Badge variant="outline" className="text-[8px] px-1 py-0 h-3.5 text-muted-foreground">
+              {changeDiffs.length} módosítás
+            </Badge>
+          </div>
+        )}
         <span className="absolute bottom-1.5 right-2 text-[9px] text-muted-foreground/40 pointer-events-none">
           Élő előnézet
         </span>
@@ -605,7 +724,7 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Label className="text-xs text-muted-foreground font-medium">CSS kód</Label>
-          {isModified && (
+          {historyState.isDirty && (
             <Badge
               variant="outline"
               className="text-[9px] px-1.5 py-0 bg-accent/50 text-accent-foreground border-accent"
@@ -623,6 +742,49 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
           )}
         </div>
         <div className="flex gap-1">
+          {/* Undo/Redo */}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleUndo}
+                  disabled={!historyState.canUndo}
+                  className="flex items-center text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <Undo2 className="h-3 w-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[10px]">Visszavonás (Ctrl+Z)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleRedo}
+                  disabled={!historyState.canRedo}
+                  className="flex items-center text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <Redo2 className="h-3 w-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-[10px]">Újra (Ctrl+Shift+Z)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+
+          <span className="w-px h-4 bg-border self-center mx-0.5" />
+
+          {historyState.isDirty && (
+            <button
+              type="button"
+              onClick={handleRevertDraft}
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded"
+            >
+              Visszaállítás
+            </button>
+          )}
           <button
             type="button"
             onClick={handleRegenerate}
@@ -642,18 +804,15 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
 
       {/* Line-numbered editor */}
       <LineEditor
-        value={cssText}
+        value={historyState.draft}
         onChange={handleCSSChange}
         diagnosticsByLine={diagnosticsByLine}
       />
 
-      {/* Status message */}
-      {statusConfig[status].text && (
-        <p
-          className={`text-[11px] font-medium ${statusConfig[status].color}`}
-          role={status === 'error' ? 'alert' : undefined}
-        >
-          {statusConfig[status].text}
+      {/* Undo depth indicator */}
+      {historyState.undoDepth > 0 && (
+        <p className="text-[9px] text-muted-foreground/40">
+          {historyState.undoDepth} visszavonási lépés elérhető
         </p>
       )}
 
@@ -661,7 +820,7 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
       <Button
         size="sm"
         onClick={handleApply}
-        disabled={!isModified || !parseResult.settings}
+        disabled={!historyState.isDirty || !parseResult.settings}
         className="w-full bg-primary text-primary-foreground text-xs"
       >
         <Code className="mr-1.5 h-3.5 w-3.5" />
@@ -669,6 +828,11 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
           ? `Alkalmaz (${parseResult.clampedFields.length} érték korrigálva)`
           : 'Alkalmaz'}
       </Button>
+
+      {/* Auto-fix panel */}
+      {parseResult.autoFixes.length > 0 && (
+        <AutoFixPanel fixes={parseResult.autoFixes} onApplyFix={handleApplyFix} />
+      )}
 
       {/* Diagnostics panel */}
       {parseResult.diagnostics.length > 0 && (
@@ -682,11 +846,8 @@ export function CSSCodeEditor({ mode, settings, onSettingsChange }: CSSCodeEdito
       <p className="text-[10px] text-muted-foreground leading-relaxed">
         Szerkeszd a CSS property-ket, majd kattints az „Alkalmaz" gombra. A motor
         automatikusan visszafejti a slider értékeket és jelzi az ismeretlen property-ket.
-        Támogatott formátumok: <code className="font-mono">hex</code>,{' '}
-        <code className="font-mono">rgb()</code>, <code className="font-mono">hsl()</code>,{' '}
-        <code className="font-mono">oklch()</code>.
-        Egységek: <code className="font-mono">px</code>, <code className="font-mono">rem</code>,{' '}
-        <code className="font-mono">em</code>, <code className="font-mono">pt</code>.
+        Undo: <kbd className="px-1 py-0.5 bg-secondary rounded text-[9px]">Ctrl+Z</kbd>{' '}
+        Redo: <kbd className="px-1 py-0.5 bg-secondary rounded text-[9px]">Ctrl+Shift+Z</kbd>
       </p>
     </div>
   );
