@@ -1196,7 +1196,7 @@ function generateAutoFixes(
 
   // WCAG fix
   if (accessibility && !accessibility.passesAA) {
-    const s = settings as Record<string, unknown>;
+    const s = settings as unknown as Record<string, unknown>;
     if ('bgAlpha' in s && typeof s.bgAlpha === 'number') {
       const suggestedAlpha = Math.min(100, s.bgAlpha + 25);
       fixes.push({
