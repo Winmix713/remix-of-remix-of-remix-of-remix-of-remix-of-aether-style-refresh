@@ -1,9 +1,11 @@
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Copy, Shuffle, Sun, Moon, Check } from 'lucide-react';
-import { useState } from 'react';
+import { Copy, Shuffle, Sun, Moon, Check, ShieldCheck, ShieldX } from 'lucide-react';
+import { useState, useMemo } from 'react';
 import type { EffectMode, GeneratedCSS, Preset, PreviewTab } from '@/types/css-generator';
 import { CSSCodeEditor } from './CSSCodeEditor';
+import { parseAndValidateCSS, type AccessibilityInfo } from './css-utils';
 
 interface PreviewPanelProps {
   mode: EffectMode;
@@ -30,6 +32,12 @@ export function PreviewPanel({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // WCAG accessibility analysis for the preview
+  const accessibility = useMemo<AccessibilityInfo | undefined>(() => {
+    const result = parseAndValidateCSS(mode, generatedCSS.css, currentSettings);
+    return result.accessibility;
+  }, [mode, generatedCSS.css, currentSettings]);
+
   const isNeu = mode === 'neumorphism';
   const isGlow = mode === 'glow';
 
@@ -37,7 +45,7 @@ export function PreviewPanel({
     ? 'bg-[hsl(240,10%,8%)]'
     : 'bg-gradient-to-br from-purple-600/40 via-blue-500/30 to-pink-500/30';
 
-  const bgStyle = isNeu ? { background: (previewStyle as any).background || '#e0e5ec' } : undefined;
+  const bgStyle = isNeu ? { background: (previewStyle as Record<string, string>).background || '#e0e5ec' } : undefined;
 
   return (
     <div className="flex h-full flex-col">
@@ -54,6 +62,22 @@ export function PreviewPanel({
           ))}
         </div>
         <div className="flex items-center gap-1.5 md:gap-2">
+          {/* WCAG badge in toolbar */}
+          {accessibility && previewTab === 'preview' && (
+            <div className="flex items-center gap-1">
+              {accessibility.passesAA ? (
+                <Badge className="text-[9px] px-1.5 py-0 h-5 bg-green-500/20 text-green-400 border-green-500/30 flex items-center gap-1">
+                  <ShieldCheck className="h-2.5 w-2.5" />
+                  {accessibility.passesAAA ? 'AAA' : 'AA'}
+                </Badge>
+              ) : (
+                <Badge className="text-[9px] px-1.5 py-0 h-5 bg-destructive/20 text-destructive border-destructive/30 flex items-center gap-1">
+                  <ShieldX className="h-2.5 w-2.5" />
+                  {accessibility.contrastRatio.toFixed(1)}:1
+                </Badge>
+              )}
+            </div>
+          )}
           <Button variant="outline" size="icon" onClick={randomize} className="h-9 w-9 md:h-8 md:w-8 border-border">
             <Shuffle className="h-3.5 w-3.5" />
           </Button>
@@ -81,6 +105,16 @@ export function PreviewPanel({
                 <div className="absolute bottom-10 right-10 h-40 w-40 rounded-full bg-blue-500/30 blur-3xl" />
                 <div className="absolute top-1/2 left-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-400/30 blur-2xl" />
               </>
+            )}
+
+            {/* WCAG overlay badge on preview card */}
+            {accessibility && !accessibility.passesAA && (
+              <div className="absolute top-3 right-3 z-20">
+                <Badge className="text-[9px] px-1.5 py-0.5 bg-destructive/90 text-destructive-foreground border-destructive/50 flex items-center gap-1 shadow-lg">
+                  <ShieldX className="h-3 w-3" />
+                  Gyenge kontraszt ({accessibility.contrastRatio.toFixed(1)}:1)
+                </Badge>
+              </div>
             )}
 
             {/* Preview Card */}
@@ -112,6 +146,22 @@ export function PreviewPanel({
                 </button>
               </div>
             </div>
+
+            {/* Recommended text color overlay */}
+            {accessibility && (
+              <div className="absolute bottom-3 left-3 z-20">
+                <div className="flex items-center gap-1.5 bg-background/80 backdrop-blur-sm rounded-md px-2 py-1 border border-border">
+                  <span className="text-[9px] text-muted-foreground">Ajánlott szín:</span>
+                  <div
+                    className="h-3 w-3 rounded-sm border border-border"
+                    style={{ backgroundColor: accessibility.recommendedTextColor }}
+                  />
+                  <code className="text-[9px] font-mono text-muted-foreground">
+                    {accessibility.recommendedTextColor}
+                  </code>
+                </div>
+              </div>
+            )}
           </div>
         ) : previewTab === 'code' ? (
           <div className="relative h-full min-h-[400px] bg-[hsl(260,20%,8%)] p-6 font-mono text-sm">
