@@ -31,7 +31,7 @@ import type { CSSParsingDiagnostic } from './use-passthrough-css-manager';
 // MAIN ADMIN PAGE COMPONENT
 // ═══════════════════════════════════════════════════════════════════
 
-export default function AdminPageWithPassthrough() {
+function AdminPageWithPassthrough() {
   // CSS generator function (your existing logic)
   const generateCSS = useCallback((settings: PresetSettings, mode: EffectMode) => {
     switch (mode) {
