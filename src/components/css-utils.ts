@@ -1174,7 +1174,7 @@ function generateAutoFixes(
       fixes.push({
         label: 'Csökkentsd a blur értéket 30px-re a jobb teljesítményért',
         property: 'blur',
-        currentValue: String((settings as Record<string, unknown>).blur ?? ''),
+        currentValue: String((settings as unknown as Record<string, unknown>).blur ?? ''),
         suggestedValue: '30',
         settingsKey: 'blur',
         settingsValue: 30,
