@@ -1185,7 +1185,7 @@ function generateAutoFixes(
       fixes.push({
         label: 'Csökkentsd a glowBlur értéket 100px-re',
         property: 'glowBlur',
-        currentValue: String((settings as Record<string, unknown>).glowBlur ?? ''),
+        currentValue: String((settings as unknown as Record<string, unknown>).glowBlur ?? ''),
         suggestedValue: '100',
         settingsKey: 'glowBlur',
         settingsValue: 100,
