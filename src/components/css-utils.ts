@@ -1156,7 +1156,7 @@ function generateAutoFixes(
   for (const key of clampedFields) {
     const range = ranges[key];
     if (!range) continue;
-    const val = (settings as Record<string, unknown>)[key];
+    const val = (settings as unknown as Record<string, unknown>)[key];
     fixes.push({
       label: `'${key}' értéke a megengedett tartományra korrigálva (${range[0]}–${range[1]})`,
       property: key,
